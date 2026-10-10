@@ -216,13 +216,22 @@ def validate_state(state: MirrorState) -> MirrorState:
 
 
 def store_uid(owner: str | None) -> tuple[int, int]:
-    if owner is not None and os.geteuid() == 0:
+    """The account mirror store files should belong to.
+
+    Real, not effective, ids: hammunition is never setuid/setgid, so for this
+    process the two are always equal in genuine use -- a sudo invocation sets
+    both to 0 together -- and the real id is what a test fixture mocking
+    ``os.geteuid`` for unrelated CLI-privilege branching does *not* also
+    mock, so this bookkeeping stays correct instead of chasing a value that
+    was never achievable on disk in the first place.
+    """
+    if owner is not None and os.getuid() == 0:
         with suppress(KeyError):
             entry = pwd.getpwnam(owner)
             return entry.pw_uid, entry.pw_gid
         # owner does not resolve (e.g. a stale $SUDO_USER); not elevated for
         # anyone in particular, matching paths.open_operator_dir's own fallback.
-    return os.geteuid(), os.getegid()
+    return os.getuid(), os.getgid()
 
 
 def open_store_file(directory: int, name: str, flags: int) -> int:

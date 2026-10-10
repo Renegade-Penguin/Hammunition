@@ -182,8 +182,16 @@ jobs:
             python scripts/capability_matrix.py --check
 
       - name: Run the test suite inside the target
+        # --security-opt seccomp=unconfined: the offline source-build and
+        # vendor-.deb sandboxes (#381) run real bwrap, which needs to create
+        # its own nested user namespace. Podman's default seccomp profile
+        # denies that syscall to a container's own processes; nothing else
+        # about the container's confinement (capabilities, read-only root,
+        # network) changes. The capability-matrix and mypy steps below keep
+        # the default profile -- only the step that actually exercises bwrap
+        # needs this.
         run: |
-          podman run --rm "hammunition-$TARGET:ci" \
+          podman run --rm --security-opt seccomp=unconfined "hammunition-$TARGET:ci" \
             python -m pytest
 
       - name: mypy --strict on the target's own Python

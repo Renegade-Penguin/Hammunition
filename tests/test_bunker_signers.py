@@ -249,6 +249,7 @@ def test_owner_handoff(
         uid, gid = 65534, 65534
     entry = pwd.struct_passwd(("operator", "x", uid, gid, "", str(tmp_path), "/bin/sh"))
     monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(os, "getuid", lambda: 0)
     monkeypatch.setattr(pwd, "getpwnam", lambda name: entry)
     store = tmp_path / "store"
     store.mkdir()
