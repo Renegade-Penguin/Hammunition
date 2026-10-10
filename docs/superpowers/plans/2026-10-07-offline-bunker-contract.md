@@ -121,7 +121,7 @@ OSM, unpinned Copernicus tiles, FSTopo) from what the Bunker saw at fetch.
   (PIV/PKCS#11).
 - The engine keeps its enrolled keys in `~/.config/hammunition/mirror.json`
   (0600: Bunker URL, name, enrolment id, each key's public line, algorithm,
-  bits, hardware-as-affirmed, no_touch_required (display only), accepted serial) and renders an OpenSSH
+  bits, hardware-as-affirmed, accepted serial) and renders an OpenSSH
   allowed-signers file from it at verify time:
   `bunker:<name> namespaces="hammunition-bunker-catalogue" <public key>`
   (no touch option: the format has none; see `no_touch_required`).

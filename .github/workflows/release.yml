@@ -19,7 +19,7 @@ permissions:
 
 jobs:
   artifacts:
-    uses: ChiefGyk3D/git-your-ship-together/.github/workflows/artifact-release.yml@fde2a491de5107c4edb953c8d24f04835c11cb0a # v1.13.0
+    uses: ChiefGyk3D/git-your-ship-together/.github/workflows/artifact-release.yml@faba0b7d1ab65e9033bef1acfa93d6d57b5808c0 # v1.21.0
     # Every permission the called workflow declares on any job must be granted
     # here: GitHub validates the declarations at startup, before any `if`, and
     # a caller that grants less fails the whole file with no check run (#284).

@@ -23,7 +23,7 @@ permissions:
 
 jobs:
   docs:
-    uses: ChiefGyk3D/git-your-ship-together/.github/workflows/docs-pages.yml@fde2a491de5107c4edb953c8d24f04835c11cb0a # v1.13.0
+    uses: ChiefGyk3D/git-your-ship-together/.github/workflows/docs-pages.yml@faba0b7d1ab65e9033bef1acfa93d6d57b5808c0 # v1.21.0
     permissions:
       contents: read
       pages: write

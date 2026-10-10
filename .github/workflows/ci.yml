@@ -29,7 +29,7 @@ jobs:
   # tether (scripts/ci-test.sh), so egress is `block` on GYST's measured list.
   # -------------------------------------------------------------------------
   ci:
-    uses: ChiefGyk3D/git-your-ship-together/.github/workflows/python-ci.yml@fde2a491de5107c4edb953c8d24f04835c11cb0a # v1.13.0
+    uses: ChiefGyk3D/git-your-ship-together/.github/workflows/python-ci.yml@faba0b7d1ab65e9033bef1acfa93d6d57b5808c0 # v1.21.0
     permissions:
       contents: read
       # python-ci's coverage job declares id-token: write (Codecov and Doppler
@@ -67,7 +67,7 @@ jobs:
   # behind `ci / CI green`: that gate is inside the called python-ci.yml.
   # -------------------------------------------------------------------------
   fuzz:
-    uses: ChiefGyk3D/git-your-ship-together/.github/workflows/python-fuzz.yml@fde2a491de5107c4edb953c8d24f04835c11cb0a # v1.13.0
+    uses: ChiefGyk3D/git-your-ship-together/.github/workflows/python-fuzz.yml@faba0b7d1ab65e9033bef1acfa93d6d57b5808c0 # v1.21.0
     permissions:
       contents: read
     with:

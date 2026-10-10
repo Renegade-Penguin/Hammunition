@@ -375,12 +375,9 @@ their own files rather than inline lists).
 2. **Default answer at setup when no token is found:** continue with a file
    key (as written), or stop and ask the operator to confirm they want to go
    without one?
-3. **Personal-mode `share`:** **RESOLVED** (see D-085 and the maintainer's
-   2026-10-08 ruling): the Bunker writer keeps tagging `owner:<enrolment-id>`
-   rows even in personal mode, so a personal Bunker can later become a group
-   Bunker without re-tagging data. Personal mode still ignores the sharing
-   filter when reading (the engine's reader, D-085): every entry answers
-   regardless of its owner tag until the Bunker's own mode changes.
+3. **Personal-mode `share`:** ignore it entirely (as written), or keep
+   recording owners so a personal Bunker can later become a group Bunker
+   without re-tagging data?
 4. **Phase 2 versus "not a mirror of upstream Debian packages"** (rejected
    list, CLAUDE.md): may an operator's Bunker cache the Debian/Ubuntu packages
    their laptops install, signatures untouched, as recommended above? Not

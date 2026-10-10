@@ -50,14 +50,14 @@ Out of scope: enabling PAM (including `security-keys pam`), apt/pip offline supp
 
 **Files:**
 - Create: `src/hammunition/keystrength.py`, `src/hammunition/catalogue.py`, `docs/reference/bunker-catalogue.md`, `tests/bunker_fixtures.py`, `tests/test_bunker_catalogue.py`.
-- Modify: `mkdocs.yml:249-263` (Reference / The engine), `containers/Dockerfile.target:70-72` (install `openssh-client git` in the target apt step; signing/bundle tests fail loudly, never skip).
+- Modify: `mkdocs.yml:249-263` (Reference / The engine).
 - Test: `tests/test_bunker_catalogue.py`, `tests/test_site.py`.
 - Read: binding contract in full; `src/hammunition/station.py:85-112` (`REGION`); `src/hammunition/manifest/schema.py:141-157` (pin format); `src/hammunition/interface/envelope.py:1-145` (do not use the CLI envelope on the wire catalogue).
 
 **Interfaces:**
 - Consumes: `station.REGION: re.Pattern[str]`.
 - Produces: `classify(public_key_line: str) -> KeyStrength`; immutable `KeyStrength(algorithm: str, bits: int, hardware_by_type: bool, rank: int, weak: bool, warning: str | None, fingerprint: str)` (last field is engine metadata, not a new wire requirement).
-- Produces: `Signer.no_touch_required: bool` (required wire metadata, informational only); `parse(raw: bytes) -> Catalogue`, `valid_enrolment_id(value: str) -> bool`, `safe_relative(value: str, field: str) -> str`, `utc(value: str, field: str) -> None`, `CatalogueError(ValueError)`, `Catalogue` with typed `bunker`, `signers`, `artifacts`, `inputs`, `serial`, `generated`, and `artifact(unit: str, name: str, enrolment_id: str | None) -> CatalogueArtifact | None` / `input(kind: str, region: str) -> CatalogueInput | None`.
+- Produces: `parse(raw: bytes) -> Catalogue`, `valid_enrolment_id(value: str) -> bool`, `safe_relative(value: str, field: str) -> str`, `utc(value: str, field: str) -> None`, `CatalogueError(ValueError)`, `Catalogue` with typed `bunker`, `signers`, `artifacts`, `inputs`, `serial`, `generated`, and `artifact(unit: str, name: str, enrolment_id: str | None) -> CatalogueArtifact | None` / `input(kind: str, region: str) -> CatalogueInput | None`.
 - Produces test helpers: `key(tmp_path: Path, algorithm: str = "ed25519", bits: int | None = None) -> Path`, `document(public_key: str, **changes: object) -> dict[str, object]`, `encode(doc: dict[str, object]) -> bytes`, `artifact(unit: str, name: str, body: bytes, **changes: object) -> dict[str, object]`. Import through `bunker_fixtures`, following the existing `json_support` import convention (there is no top-level `tests/__init__.py`).
 
 - [ ] Write failing tests and the complete fixture helper. No canned public-key string and no CI token:
@@ -68,15 +68,12 @@ import hashlib
 import json
 import subprocess
 from pathlib import Path
-
 from hammunition.keystrength import classify
 
 
 def key(tmp_path: Path, algorithm: str = "ed25519", bits: int | None = None) -> Path:
     tmp_path.mkdir(parents=True, exist_ok=True)
     path = tmp_path / f"key-{algorithm}-{bits or 0}"
-    if path.exists() or path.with_suffix(".pub").exists():
-        raise FileExistsError(f"test key already exists: {path}")
     argv = ["ssh-keygen", "-q", "-t", algorithm, "-N", "", "-f", str(path)]
     if bits is not None:
         argv += ["-b", str(bits)]
@@ -92,7 +89,7 @@ def document(public_key: str, **changes: object) -> dict[str, object]:
         "bunker": {"name": "bunker", "mode": "personal"},
         "signers": [{"id": strength.fingerprint, "public_key": public_key,
                      "algorithm": strength.algorithm, "bits": strength.bits,
-                     "hardware": False, "no_touch_required": False, "signature": "catalogue.sig.d/1.sig"}],
+                     "hardware": False, "signature": "catalogue.sig.d/1.sig"}],
         "engine_version": "0.22.0", "artifacts": [], "inputs": [],
         "deferred": [], "declined": [], "last_run": None,
     }
@@ -121,13 +118,12 @@ def artifact(unit: str, name: str, body: bytes, **changes: object) -> dict[str, 
 
 ```python
 from pathlib import Path
-
 # tests/test_bunker_catalogue.py
+import json
 import pytest
-from bunker_fixtures import artifact, document, encode, key
 from hammunition.catalogue import CatalogueError, parse
 from hammunition.keystrength import classify
-
+from bunker_fixtures import artifact, document, encode, key
 
 @pytest.mark.parametrize("algorithm,bits,rank,weak", [
     ("ed25519", None, 1, False), ("ecdsa", 384, 2, False),
@@ -181,6 +177,7 @@ def test_failed_v2_entry_is_preserved_but_not_usable(tmp_path: Path) -> None:
                       size=None, fetched=None, verified=None, status="failed", reason="HTTP 503")
     cat = parse(encode(document(public, artifacts=[failed])))
     assert cat.artifacts[0].path is None and cat.artifacts[0].status == "failed"
+
 ```
 
 Also parameterize every field in the contract table: missing field, null where forbidden, wrong type, invalid timestamp/calendar date, key algorithm/bits/id mismatch, `inputs[].kind`/region, negative sizes, malformed sha256, unsafe previous/path/name, owner id with CR/LF, and duplicate inputs/signers. Test malformed UTF-8, duplicate JSON keys, non-object root, DSA refusal, all ECDSA ranks and RSA rank 4 (generate RSA 2560). These are field rules, not guesses about v2 status vocabulary: retain status/reason/previous strings without inventing a “current only” format restriction.
@@ -205,11 +202,10 @@ The `Catalogue` code below deliberately has no minimum length on `artifacts` or 
 - [ ] Implement the classifier as a full function. Validate the key blob's embedded type against the line type, so a substituted prefix cannot change hardware classification:
 
 ```python
+from dataclasses import dataclass
 import base64
 import struct
 import subprocess
-from dataclasses import dataclass
-
 
 @dataclass(frozen=True)
 class KeyStrength:
@@ -266,9 +262,7 @@ Add the shared model base first:
 
 ```python
 from typing import Literal
-
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
-
 
 class Wire(BaseModel):
     model_config = ConfigDict(strict=True, frozen=True, extra="allow")
@@ -287,7 +281,6 @@ class Signer(Wire):
     public_key: str
     algorithm: str
     bits: int
-    no_touch_required: bool
     hardware: bool
     signature: str
 
@@ -353,11 +346,8 @@ import json
 import re
 from datetime import datetime
 from pathlib import PurePosixPath
-
 from pydantic import ValidationError
-
 from hammunition.station import REGION
-
 
 class CatalogueError(ValueError):
     pass
@@ -432,10 +422,8 @@ def parse(raw: bytes) -> Catalogue:
                 raise CatalogueError(f"{where}.{field}: does not match public_key")
         if strength.hardware_by_type and not signer.hardware:
             raise CatalogueError(f"{where}.hardware: sk keys are hardware by type")
-    rows: list[tuple[str, int, CatalogueArtifact | CatalogueInput]] = [("artifacts", n, row) for n, row in enumerate(cat.artifacts)]
-    rows += [("inputs", n, row) for n, row in enumerate(cat.inputs)]
-    for field_name, n, row in rows:
-        where = f"{field_name}[{n}]"
+    for n, row in enumerate([*cat.artifacts, *cat.inputs]):
+        where = f"{'artifacts' if isinstance(row, CatalogueArtifact) else 'inputs'}[{n}]"
         if row.path is not None:
             safe_relative(row.path, f"{where}.path")
         safe_relative(row.name, f"{where}.name")
@@ -478,7 +466,7 @@ Remove the unused `PurePosixPath` import. `JsonValue` is imported from pydantic.
 - [ ] Commit:
 
 ```bash
-git add src/hammunition/keystrength.py src/hammunition/catalogue.py tests/bunker_fixtures.py tests/test_bunker_catalogue.py docs/reference/bunker-catalogue.md mkdocs.yml containers/Dockerfile.target
+git add src/hammunition/keystrength.py src/hammunition/catalogue.py tests/bunker_fixtures.py tests/test_bunker_catalogue.py docs/reference/bunker-catalogue.md mkdocs.yml
 git commit -m "feat: define Bunker v3 catalogue and key strength reader"
 ```
 
@@ -493,7 +481,6 @@ git commit -m "feat: define Bunker v3 catalogue and key strength reader"
 - Consumes: Task 1 `parse`, `Catalogue`, `classify`, `KeyStrength`; `paths.owner_aware_dir`, `open_operator_dir(path: Path, owner: str | None = None) -> int | None`.
 - Produces: frozen `EnrolledKey(id: str, public_key: str, algorithm: str, bits: int, hardware: bool, no_touch_required: bool = False)`; frozen `MirrorState(url: str, name: str, mode: str, enrolment_id: str | None, keys: tuple[EnrolledKey, ...], accepted_serial: int, generated: str | None = None)`.
 - Produces: `mirror_path(owner: str | None = None) -> Path`, `load_mirror(path: Path | None = None, *, owner: str | None = None) -> MirrorState | None`, `save_mirror(state: MirrorState, path: Path | None = None, *, owner: str | None = None, allow_older: bool = False) -> Path`, `clear_mirror(*, owner: str | None = None) -> None`, `allowed_signers(state: MirrorState) -> str`, `verify(raw: bytes, signatures: Mapping[str, bytes], state: MirrorState, *, require_hardware: bool = False, now: datetime) -> VerifiedCatalogue`, `SignerError(ValueError)`.
-- Produces: `write_state(directory: int, filename: str, state: MirrorState, owner: str | None) -> None`, `advance_mirror(state: MirrorState, serial: int, generated: str, *, owner: str | None = None) -> None`.
 - Produces: frozen `VerifiedCatalogue(catalogue: Catalogue, raw: bytes, key: EnrolledKey, strength: KeyStrength, warnings: tuple[str, ...])`; `signed(tmp_path: Path, private: Path, doc: dict[str, object]) -> tuple[bytes, dict[str, bytes]]` test helper.
 
 - [ ] Write the failing real-key verification tests:
@@ -511,23 +498,14 @@ def signed(tmp_path: Path, private: Path, doc: dict[str, object]) -> tuple[bytes
 ```
 
 ```python
+from pathlib import Path
 # tests/test_bunker_signers.py
 from dataclasses import replace
 from datetime import UTC, datetime
-from pathlib import Path
-
 import pytest
-from bunker_fixtures import document, key, signed
 from hammunition.keystrength import classify
-from hammunition.signers import (
-    EnrolledKey,
-    MirrorState,
-    SignerError,
-    load_mirror,
-    save_mirror,
-    verify,
-)
-
+from hammunition.signers import EnrolledKey, MirrorState, SignerError, verify, load_mirror, save_mirror
+from bunker_fixtures import document, key, signed
 
 @pytest.mark.parametrize("algorithm,bits", [("ed25519", None), ("ecdsa", 384), ("rsa", 4096), ("rsa", 2048)])
 def test_real_signatures_and_policy(tmp_path: Path, algorithm: str, bits: int | None) -> None:
@@ -535,7 +513,7 @@ def test_real_signatures_and_policy(tmp_path: Path, algorithm: str, bits: int | 
     public = private.with_suffix(".pub").read_text().strip()
     strength = classify(public)
     enrolled = EnrolledKey(strength.fingerprint, public, strength.algorithm, strength.bits, False)
-    state = MirrorState("http://bunker.invalid/", "bunker", "personal", None, (enrolled,), 41)
+    state = MirrorState("file:///unused", "bunker", "personal", None, (enrolled,), 41)
     raw, sigs = signed(tmp_path, private, document(public))
     verified = verify(raw, sigs, state, now=datetime(2026, 10, 7, tzinfo=UTC))
     assert verified.key == enrolled
@@ -555,46 +533,10 @@ def test_real_signatures_and_policy(tmp_path: Path, algorithm: str, bits: int | 
     save_mirror(replace(state, accepted_serial=43), stored)
     with pytest.raises(SignerError, match="serial"):
         save_mirror(state, stored)
-    current = load_mirror(stored)
-    assert current is not None and current.accepted_serial == 43
+    assert load_mirror(stored).accepted_serial == 43
 ```
 
 Add tests for same serial (accepted), exact 30-day boundary (no warning until older), mismatching Bunker name, forged key id/public line, missing/bad signatures followed by a good enrolled signature, an un-enrolled valid key, a file key claiming hardware when the stored key is not affirmed, and an affirmed PIV-shaped file key (`hardware=True` locally) passing the policy without a token. Run concurrent writers under a shared temporary config; assert max serial wins. Plant a symlink for `mirror.json` and the lock file and assert refusal, no target touched. Mock owner passwd/euid as in `tests/test_isolation.py`; assert the temporary and final file are operator-owned under sudo.
-
-Add the concrete concurrent serial test to `tests/test_bunker_signers.py`:
-
-```python
-from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
-
-import pytest
-from bunker_fixtures import key
-from hammunition.keystrength import classify
-from hammunition.signers import (
-    EnrolledKey,
-    MirrorState,
-    advance_mirror,
-    load_mirror,
-    save_mirror,
-)
-
-
-def test_concurrent_verifications_preserve_highest_serial(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
-    private = key(tmp_path)
-    public = private.with_suffix(".pub").read_text().strip()
-    strength = classify(public)
-    enrolled = EnrolledKey(strength.fingerprint, public, strength.algorithm, strength.bits, False)
-    state = MirrorState("http://bunker.invalid", "bunker", "personal", None, (enrolled,), 42)
-    save_mirror(state)
-    def advance(serial: int) -> None:
-        advance_mirror(state, serial, "2026-10-07T12:00:00Z")
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        list(executor.map(advance, [44, 43]))
-    current = load_mirror()
-    assert current is not None and current.accepted_serial == 44
-```
-
 
 - [ ] Run: `.venv/bin/pytest tests/test_bunker_signers.py -q`. Expected FAIL: `ModuleNotFoundError: No module named 'hammunition.signers'`.
 
@@ -603,9 +545,7 @@ def test_concurrent_verifications_preserve_highest_serial(tmp_path: Path, monkey
 ```python
 from dataclasses import dataclass, replace
 from typing import ClassVar
-
 from pydantic import ConfigDict
-
 
 class SignerError(ValueError):
     pass
@@ -643,11 +583,11 @@ class VerifiedCatalogue:
 - [ ] Implement full verification and rendering functions:
 
 ```python
-import subprocess
-import tempfile
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+import subprocess
+import tempfile
 
 NAMESPACE = "hammunition-bunker-catalogue"
 
@@ -784,13 +724,9 @@ def store_lock(path: Path, owner: str | None) -> Iterator[int]:
         elif info.st_uid != uid:
             raise SignerError("mirror.lock belongs to another account")
         fcntl.flock(lock, fcntl.LOCK_EX)
-    except OSError as exc:
-        if lock >= 0:
-            os.close(lock)
-        os.close(directory)
-        raise SignerError(f"mirror store: {exc}") from exc
-    try:
         yield directory
+    except OSError as exc:
+        raise SignerError(f"mirror store: {exc}") from exc
     finally:
         if lock >= 0:
             os.close(lock)
@@ -833,41 +769,25 @@ def save_mirror(state: MirrorState, path: Path | None = None, *,
         if (old is not None and (old.url, old.name) == (state.url, state.name)
             and state.accepted_serial < old.accepted_serial and not allow_older):
             raise SignerError("mirror serial cannot be lowered; hammunition mirror accept-older")
-        write_state(directory, target.name, state, owner)
+        temporary = f".mirror-{secrets.token_hex(12)}"
+        try:
+            fd = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW,
+                         0o600, dir_fd=directory)
+            with os.fdopen(fd, "wb") as stream:
+                if os.geteuid() == 0:
+                    os.fchown(stream.fileno(), *store_uid(owner))
+                stream.write((json.dumps(asdict(state), ensure_ascii=False) + "\n").encode())
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, target.name, src_dir_fd=directory, dst_dir_fd=directory)
+            os.fsync(directory)
+        finally:
+            try:
+                os.unlink(temporary, dir_fd=directory)
+            except FileNotFoundError:
+                pass
     return target
 
-
-def write_state(directory: int, filename: str, state: MirrorState,
-                owner: str | None) -> None:
-    temporary = f".mirror-{secrets.token_hex(12)}"
-    try:
-        fd = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW,
-                     0o600, dir_fd=directory)
-        with os.fdopen(fd, "wb") as stream:
-            if os.geteuid() == 0:
-                os.fchown(stream.fileno(), *store_uid(owner))
-            stream.write((json.dumps(asdict(state), ensure_ascii=False) + "\n").encode())
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, filename, src_dir_fd=directory, dst_dir_fd=directory)
-        os.fsync(directory)
-    finally:
-        try:
-            os.unlink(temporary, dir_fd=directory)
-        except FileNotFoundError:
-            pass
-
-
-def advance_mirror(state: MirrorState, serial: int, generated: str, *,
-                   owner: str | None = None) -> None:
-    target = mirror_path(owner)
-    with store_lock(target, owner) as directory:
-        current = read_state(directory, target.name, owner)
-        if current is None or (current.url, current.name, current.keys, current.enrolment_id) != (state.url, state.name, state.keys, state.enrolment_id):
-            raise SignerError("mirror enrolment changed during verification; retry the command")
-        if serial > current.accepted_serial or (serial == current.accepted_serial and current.generated is None):
-            updated = replace(current, accepted_serial=serial, generated=generated)
-            write_state(directory, target.name, validate_state(updated), owner)
 
 def clear_mirror(*, owner: str | None = None) -> None:
     target = mirror_path(owner)
@@ -882,7 +802,7 @@ def clear_mirror(*, owner: str | None = None) -> None:
         os.fsync(directory)
 ```
 
-Test the lock ownership branch: an existing lock belonging to another account refuses, whereas only a just-created root-owned lock is handed to the operator. Preserve the exclusive lock for all read/modify/write paths. Under concurrent verified loads, serial advancement should merge the greatest serial rather than fail a legitimate lower writer; use a dedicated `advance_mirror(state, serial, generated)` locked updater and keep `save_mirror` refusal for explicit lower-state saves. The updater is defined above in this task.
+Test the lock ownership branch: an existing lock belonging to another account refuses, whereas only a just-created root-owned lock is handed to the operator. Preserve the exclusive lock for all read/modify/write paths. Under concurrent verified loads, serial advancement should merge the greatest serial rather than fail a legitimate lower writer; use a dedicated `advance_mirror(state, serial, generated)` locked updater and keep `save_mirror` refusal for explicit lower-state saves. The updater is defined in Task 4 below.
 
 - [ ] Run: `.venv/bin/pytest tests/test_bunker_catalogue.py tests/test_bunker_signers.py tests/test_isolation.py -q`; expected PASS. `.venv/bin/mypy --strict`; expected exit 0.
 - [ ] Commit:
@@ -895,38 +815,32 @@ git commit -m "feat: verify enrolled Bunker signers and protect serial state"
 ### Task 3: A3 — Mirror CLI, fingerprint consent, station policy and JSON
 
 **Files:**
-- Create: `src/hammunition/mirror.py`, `src/hammunition/mirror_transport.py`, `src/hammunition/interface/mirror.py`, `tests/test_mirror_cli.py`.
-- Modify: `src/hammunition/cli/main.py:403-417,496-837,8051-8113,8660-8680,8890-8945,9116-9157`; `src/hammunition/consent/gate.py:195-305`, `src/hammunition/consent/__init__.py:1-40`; `src/hammunition/station.py:106-112,169-212,230-275,340-350,478-516,587-660,677-744`; `src/hammunition/interface/station.py:1-257` (stored mirror value and builders); `docs/reference/cli.md` (hand-written), `docs/reference/json-interface.md` and `docs/guides/station-settings.md` (regenerate), `tests/test_docs_generated.py`, `tests/fixtures/json` (mirror/station goldens).
+- Create: `src/hammunition/mirror.py`, `src/hammunition/interface/mirror.py`, `tests/test_mirror_cli.py`.
+- Modify: `src/hammunition/cli/main.py:403-417,496-837,8051-8113,8660-8680,8890-8945,9116-9157`; `src/hammunition/consent/gate.py:195-305`, `src/hammunition/consent/__init__.py:1-40`; `src/hammunition/station.py:106-112,169-212,230-275,340-350,478-516,587-660,677-744`; `src/hammunition/interface/station.py:1-257` (stored mirror value and builders); `scripts/gen_json_reference.py:85-125` (command list); `docs/reference/cli.md` (generated blocks), `docs/reference/json-interface.md` (regenerate).
 - Test: `tests/test_mirror_cli.py`, `tests/test_station.py`, `tests/test_json_station_hardware.py`, `tests/test_docs_json_interface.py`, `tests/test_docs_generated.py`.
 
 **Interfaces:**
 - Consumes: Task 2 store/verification, `consent.ConsentRecord`, `Decision`, `ConsentDeclined`, `ConsentUnavailable`; CLI `operator(args) -> str`, `envelope.emit`, `envelope.wanted`, `EXIT_OK`, `EXIT_UNPLANNABLE`.
 - Produces: `Station.mirror_require_hardware_key: bool = False` (excluded from templates); `resolve_mirror_consent(fingerprint: str, disclosure: str, *, prompt: Callable[[str], str] | None, actor: str | None = None, now: Callable[[], datetime] | None = None) -> ConsentRecord`.
-- Produces: `Candidate(raw: bytes, signatures: dict[str, bytes])`, `read_candidate(url: str, enrolment_id: str | None) -> Candidate` (HTTP implementation here, extended to file in Task 4); `enrol(candidate: Candidate, url: str, enrolment_id: str | None, *, choose: Callable[[str], str] | None, affirm_hardware: Callable[[str], bool] | None, owner: str | None, require_hardware: bool, now: datetime, record_consent: Callable[[ConsentRecord], None]) -> MirrorState`.
-- Produces: `MirrorTransport(base: str, enrolment_id: str | None = None)`, `read(relative: str, *, max_bytes: int) -> bytes`, `open(url: str) -> ContextManager[IO[bytes]]`, `read_catalogue(source: MirrorTransport) -> bytes` for candidate reads; Task 4 adds the verified loader and file base validation.
-- Produces: `record_mirror_consent(record: ConsentRecord, *, owner: str | None) -> None` logs ConsentRecord.to_log_entry via the owner-aware transaction log.
+- Produces: `Candidate(raw: bytes, signatures: dict[str, bytes])`, `candidate_read(base: str, relative: str, enrolment_id: str | None, *, max_bytes: int) -> bytes`, `read_candidate(url: str, enrolment_id: str | None) -> Candidate` (HTTP implementation here, extended to file in Task 4); `enrol(candidate: Candidate, url: str, enrolment_id: str | None, *, choose: Callable[[str], str] | None, affirm_hardware: Callable[[str], bool] | None, owner: str | None, require_hardware: bool, now: datetime) -> MirrorState`.
 - Produces: CLI `cmd_mirror_enrol(args: argparse.Namespace) -> int`, `cmd_mirror_status(args: argparse.Namespace) -> int`, `cmd_mirror_accept_older(args: argparse.Namespace) -> int`; parser `mirror enrol URL [--enrolment-id ID]`, `mirror status [--json]`, `mirror accept-older`, `station set --mirror-require-hardware-key` / `--no-mirror-require-hardware-key`.
 - Produces: `MirrorKeyView(id: str, algorithm: str, bits: int, hardware: bool, weak: bool, warning: str | None)`, `MirrorDocument(Strict)` (`KIND="mirror"`, `url: str | None`, `name: str | None`, `mode: str | None`, `enrolment_id: str | None`, `accepted_serial: int | None`, `generated: str | None`, `age_days: int | None`, `require_hardware: bool`, `keys: tuple[MirrorKeyView, ...]`, `warnings: tuple[str, ...]`), `build_mirror(state: MirrorState | None, *, require_hardware: bool, now: datetime) -> MirrorDocument`, `render_mirror(doc: MirrorDocument) -> list[str]`.
 
 - [ ] Write failing tests with `main()` and monkeypatched `read_candidate`, keeping station/store under each test's XDG config:
 
 ```python
-import importlib
-import json
-from pathlib import Path
-
 import pytest
-
+from pathlib import Path
+import json
+import importlib
 cli = importlib.import_module("hammunition.cli.main")
-from bunker_fixtures import document, key, signed
-
 from hammunition import mirror, signers
 from hammunition.station import Station, load_station, save_station
+from bunker_fixtures import document, key, signed
 
 
 def test_enrol_requires_fingerprint_and_clear_removes_trust(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    for var in ("XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"):
-        monkeypatch.setenv(var, str(tmp_path / var.lower()))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     private = key(tmp_path, "rsa", 2048)
     public = private.with_suffix(".pub").read_text().strip()
     raw, sigs = signed(tmp_path, private, document(public))
@@ -940,43 +854,18 @@ def test_enrol_requires_fingerprint_and_clear_removes_trust(tmp_path: Path, monk
     monkeypatch.setattr("builtins.input", lambda *a: fingerprint)
     assert cli.main(["mirror", "enrol", "http://bunker.invalid/"]) == 0
     assert load_station().mirror == "http://bunker.invalid/"
-    current = signers.load_mirror()
-    assert current is not None and current.accepted_serial == 42
+    assert signers.load_mirror().accepted_serial == 42
     assert cli.main(["station", "set", "--clear-mirror"]) == 0
     assert signers.load_mirror() is None
 
 
 def test_status_json_is_one_document(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    for var in ("XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"):
-        monkeypatch.setenv(var, str(tmp_path / var.lower()))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     assert cli.main(["mirror", "status", "--json"]) == 0
     result = json.loads(capsys.readouterr().out)
     assert result["schema"] == "hammunition/1"
     assert result["kind"] == "mirror" and result["url"] is None
 ```
-
-Test two distinct typed responses and the logged consent, using the injected recorder:
-
-```python
-def test_second_fingerprint_prompt_is_real(tmp_path: Path) -> None:
-    from datetime import UTC, datetime
-
-    from hammunition.consent import ConsentDeclined, ConsentRecord
-    private = key(tmp_path)
-    public = private.with_suffix(".pub").read_text().strip()
-    raw, signatures = signed(tmp_path, private, document(public))
-    identity = signers.classify(public).fingerprint
-    responses = iter((identity, "wrong"))
-    records: list[ConsentRecord] = []
-    with pytest.raises(ConsentDeclined):
-        mirror.enrol(mirror.Candidate(raw, signatures), "http://bunker.invalid/", None,
-                     choose=lambda text: next(responses), affirm_hardware=None,
-                     owner=None, require_hardware=False, now=datetime(2026, 10, 7, tzinfo=UTC),
-                     record_consent=records.append)
-    assert records == []
-```
-
-Also test the successful second response stores exactly one ConsentRecord and the CLI log contains its fingerprint, timestamp and disclosure hash. Assert enrolment display, status text and status JSON expose no_touch_required for a signer; no verification path adds an option for it.
 
 Add tests that `--yes` cannot enrol or accept-older; noninteractive enrol refuses; wrong/lowercase fingerprint is not normalized (OpenSSH SHA256 fingerprints are case-sensitive); advertised algorithm/bits and RSA warning printed before consent; non-sk `hardware:true` with declined hardware affirmation stores a file key; affirmation stores hardware; bad signature writes neither station nor store. Re-enrolment to the same URL/name preserves old serial, retains only explicitly accepted keys from the new catalogue, and refuses a lower catalogue. Changing URL/name is explicit new enrolment, never automatic trust reuse. `accept-older` prints old/new serial and backup-restoration explanation, requires typed `yes`, verifies the candidate first using a transient state whose serial is 0, then calls `save_mirror(..., allow_older=True)`; no bare reset command bypasses a bad signature. Preserve station policy on clear; clear removes URL/keys/id/serial together. Validate local state/URL consistency on status and install: a manually changed `station.mirror` requires re-enrolment before catalogue use.
 
@@ -1013,15 +902,14 @@ class Candidate:
 def display_signer(signer: Signer) -> str:
     strength = classify(signer.public_key)
     origin = "hardware by type" if strength.hardware_by_type else "hardware claimed, needs affirmation" if signer.hardware else "file key"
-    line = f"{signer.id}: {strength.algorithm}, {strength.bits} bits, {origin}, no_touch_required={signer.no_touch_required}"
+    line = f"{signer.id}: {strength.algorithm}, {strength.bits} bits, {origin}"
     return line + (f"; {strength.warning}" if strength.warning else "")
 
 
 def enrol(candidate: Candidate, url: str, enrolment_id: str | None, *,
           choose: Callable[[str], str] | None,
           affirm_hardware: Callable[[str], bool] | None,
-          owner: str | None, require_hardware: bool, now: datetime,
-          record_consent: Callable[[ConsentRecord], None]) -> MirrorState:
+          owner: str | None, require_hardware: bool, now: datetime) -> MirrorState:
     normalized = Station(mirror=url).mirror
     if normalized is None:
         raise SignerError("mirror URL is missing")
@@ -1039,8 +927,7 @@ def enrol(candidate: Candidate, url: str, enrolment_id: str | None, *,
     keys: list[EnrolledKey] = []
     for identity in ids:
         signer = advertised[identity]
-        consent = resolve_mirror_consent(identity, display_signer(signer), prompt=choose, actor=owner)
-        record_consent(consent)
+        resolve_mirror_consent(identity, display_signer(signer), prompt=lambda _: identity, actor=owner)
         strength = classify(signer.public_key)
         hardware = strength.hardware_by_type
         if not hardware and signer.hardware and affirm_hardware is not None:
@@ -1048,7 +935,7 @@ def enrol(candidate: Candidate, url: str, enrolment_id: str | None, *,
                 "The Bunker claims this key is hardware-backed; the algorithm cannot prove that. "
                 "Affirm that you verified its hardware origin? Type yes: "
             )
-        keys.append(EnrolledKey(identity, signer.public_key, strength.algorithm, strength.bits, hardware, signer.no_touch_required))
+        keys.append(EnrolledKey(identity, signer.public_key, strength.algorithm, strength.bits, hardware))
     old = load_mirror(owner=owner)
     serial = old.accepted_serial if old is not None and (old.url, old.name) == (normalized, parsed.bunker.name) else 0
     state = MirrorState(normalized, parsed.bunker.name, parsed.bunker.mode, enrolment_id,
@@ -1063,120 +950,63 @@ def enrol(candidate: Candidate, url: str, enrolment_id: str | None, *,
     return state
 
 
+def candidate_read(base: str, relative: str, enrolment_id: str | None, *, max_bytes: int) -> bytes:
+    base = _check_mirror(base)
+    if urlsplit(base).scheme not in ("http", "https"):
+        raise BackendError("this enrolment transport requires an HTTP(S) Bunker")
+    relative = safe_relative(relative, "candidate path")
+    if enrolment_id is not None and not valid_enrolment_id(enrolment_id):
+        raise BackendError("invalid enrolment id")
+    headers = {"User-Agent": "hammunition"}
+    if enrolment_id is not None:
+        headers["X-Hammunition-Enrolment"] = enrolment_id
+    url = base.rstrip("/") + "/" + "/".join(quote(part, safe="") for part in relative.split("/"))
+    opener = urllib.request.OpenerDirector()
+    for handler in (urllib.request.HTTPHandler(), urllib.request.HTTPSHandler(),
+                    urllib.request.HTTPErrorProcessor(), urllib.request.HTTPDefaultErrorHandler()):
+        opener.add_handler(handler)
+    try:
+        response = opener.open(urllib.request.Request(url, headers=headers), timeout=MIRROR_TIMEOUT)
+        if response is None:
+            raise BackendError("no candidate HTTP handler")
+        with response:
+            raw: bytes = response.read(max_bytes + 1)
+    except (urllib.error.URLError, OSError) as exc:
+        raise BackendError(f"cannot fetch Bunker candidate {relative}: {exc}") from exc
+    if len(raw) > max_bytes:
+        raise BackendError(f"Bunker candidate {relative} exceeds {max_bytes} bytes")
+    return raw
+
+
 def read_candidate(url: str, enrolment_id: str | None) -> Candidate:
-    source = MirrorTransport(url, enrolment_id)
-    raw = read_catalogue(source)
+    raw = candidate_read(url, "catalogue.json", enrolment_id, max_bytes=32 * 1024 * 1024)
     parsed = parse(raw)
     signatures: dict[str, bytes] = {}
     for signer in parsed.signers:
         try:
-            signatures[signer.signature] = source.read(signer.signature, max_bytes=64 * 1024)
+            signatures[signer.signature] = candidate_read(url, signer.signature, enrolment_id, max_bytes=64 * 1024)
         except BackendError:
             continue
     return Candidate(raw, signatures)
 ```
 
-The enrolment code records typed ConsentRecords through its injected `record_consent` callback, wired by the CLI to `TransactionLog.append`. A failed store write restores the previous station URL when safe; signature failure writes neither file. Non-sk hardware claims require separate typed `yes`; advertised no_touch_required is display-only.
+For Task 3 use the HTTP-only candidate_read above inside mirror.py; Task 4 moves that IO to MirrorTransport and removes candidate_read. Tests inject `read_candidate` while testing consent, and Task 4 adds actual HTTP/file tests. Do not import a nonexistent future module into the Task 3 implementation. The three functions above use normal local imports for parser/store/types and read no private key.
 
-Create the final shared transport in `src/hammunition/mirror_transport.py` now. Import `station._check_mirror` explicitly, and import parser/path helpers from catalogue. Task 3 station validation still admits HTTP(S) only; Task 4 extends accepted base schemes to file. Use `from __future__ import annotations` at the top of mirror.py and mirror_transport.py; read_catalogue’s transport annotation is forward-referenced. The file walk is already final here, never replaced later. Runtime transport errors import BackendError/TransportUnreachable from their existing modules; this module is not imported by resolution.py.
+Record the returned ConsentRecords via the existing transaction/runlog route; do not discard them as the minimal function above does. A store-write failure after station-save is reported as a failed enrolment; the URL/store mismatch is a refusal on the next run, not usable partial trust. No signature failure writes either file. Add a restoration test and preserve the prior mirror URL on a failed store write using `save_station(current)` when safe; never lower the old store's serial as cleanup.
 
-```python
-def read_catalogue(source: MirrorTransport) -> bytes:
-    try:
-        return source.read("catalogue.json", max_bytes=32 * 1024 * 1024)
-    except BackendError as exc:
-        url = source.base.rstrip("/") + "/catalogue.json"
-        raise BackendError(
-            f"no catalogue at {url}: {exc}. "
-            "Enrol a Bunker that serves one, or run without --offline."
-        ) from exc
+ For non-sk keys claiming hardware, the extra disclosure is “The Bunker claims this key is hardware-backed; the algorithm cannot prove that. Affirm that you verified its hardware origin?”; store true only after a separate typed `yes`. A file key never inherits this claim on refresh. `hardware_by_type` is automatically true for sk keys. For sk signatures without a touch, try verification with the default allowed line first; if it fails, explicitly disclose and ask whether to permit `no-touch-required`, then try that option. This is a local enrollment option; do not invent a required new wire field. Record the option only after its signature verifies. Never weaken an existing key silently.
 
-
-class MirrorTransport:
-    def __init__(self, base: str, enrolment_id: str | None = None) -> None:
-        self.base = _check_mirror(base).rstrip("/")
-        self.parts = urlsplit(self.base)
-        if enrolment_id is not None and not valid_enrolment_id(enrolment_id):
-            raise BackendError("invalid enrolment id")
-        self.enrolment_id = enrolment_id
-        self.opener = urllib.request.OpenerDirector()
-        for handler in (urllib.request.HTTPHandler(), urllib.request.HTTPSHandler(),
-                        urllib.request.HTTPErrorProcessor(), urllib.request.HTTPDefaultErrorHandler()):
-            self.opener.add_handler(handler)
-
-    @contextmanager
-    def open(self, url: str) -> Iterator[IO[bytes]]:
-        parts = urlsplit(url)
-        prefix = self.parts.path.rstrip("/") + "/"
-        if (parts.scheme, parts.netloc) != (self.parts.scheme, self.parts.netloc) or not parts.path.startswith(prefix) or parts.query or parts.fragment:
-            raise BackendError("mirror request leaves the configured base")
-        relative = safe_relative(unquote(parts.path[len(prefix):]), "mirror request")
-        if parts.scheme == "file":
-            directory = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
-            fd = -1
-            try:
-                components = [*Path(unquote(self.parts.path)).parts[1:], *relative.split("/")]
-                for index, component in enumerate(components):
-                    safe_relative(component, "file mirror component")
-                    flags = os.O_RDONLY | os.O_NOFOLLOW
-                    if index < len(components) - 1:
-                        flags |= os.O_DIRECTORY
-                    child = os.open(component, flags, dir_fd=directory)
-                    os.close(directory)
-                    directory = child
-                fd, directory = directory, -1
-                if not stat.S_ISREG(os.fstat(fd).st_mode):
-                    raise BackendError("file mirror target is not a regular file")
-                stream = os.fdopen(fd, "rb")
-                fd = -1
-            except OSError as exc:
-                raise BackendError(f"file mirror {relative}: {exc}") from exc
-            finally:
-                if directory >= 0:
-                    os.close(directory)
-                if fd >= 0:
-                    os.close(fd)
-            with stream:
-                yield stream
-            return
-        headers = {"User-Agent": "hammunition"}
-        if self.enrolment_id is not None:
-            headers["X-Hammunition-Enrolment"] = self.enrolment_id
-        try:
-            response = self.opener.open(urllib.request.Request(url, headers=headers), timeout=MIRROR_TIMEOUT)
-            if response is None:
-                raise BackendError("no mirror transport handler")
-        except urllib.error.HTTPError as exc:
-            raise BackendError(f"mirror returned HTTP {exc.code}; redirects are not followed") from exc
-        except (urllib.error.URLError, OSError) as exc:
-            raise TransportUnreachable(f"mirror could not be reached: {exc}") from exc
-
-        with response:
-            yield response
-
-    def read(self, relative: str, *, max_bytes: int) -> bytes:
-        relative = safe_relative(relative, "mirror path")
-        url = self.base.rstrip("/") + "/" + "/".join(quote(p, safe="") for p in relative.split("/"))
-        with self.open(url) as stream:
-            raw = stream.read(max_bytes + 1)
-        if len(raw) > max_bytes:
-            raise BackendError(f"{relative}: larger than {max_bytes} bytes")
-        return raw
-```
-
-Test `read_candidate` against a temporary loopback catalogue and signatures with the id header; a redirect refuses without contacting its destination. These HTTP transport tests belong in `tests/test_mirror_cli.py` here, while Task 4 adds loader/file tests. Test that an OSError from the caller’s `with transport.open(...)` body propagates unchanged.
+Implement initial `read_candidate` with a no-redirect HTTP(S)-only `OpenerDirector`, `MIRROR_TIMEOUT`, bounded reads of catalogue (32 MiB) and each signature (64 KiB). Run Task 1 `parse` before requesting the validated signature paths; use every request's `X-Hammunition-Enrolment` header when id is supplied. An id is an opaque nonempty printable value without whitespace, CR/LF/NUL; percent-quote URL path segments, never interpolate an id into a path. Task 4 consolidates this into the reusable transport.
 
 `mirror status` reads stored data, not the network; “catalogue age” is age of the last verified stored `generated`. Missing store prints “not enrolled”, not a failure. Construct text and JSON from `MirrorDocument` with `described()` fields. Decorate status with `@envelope.json_capable()` and add JSON parser flags through `_add_json_flag`. Enrol/accept-older are interactive mutation commands and have no JSON form; the envelope returns one error document when asked. Station policy appears in `StationDocument`, `StationSetDocument` and station round-trip tests. Carry it through both `prompt_for` constructors, `_station_for` and `_cmd_station_set`; `_KNOWN_KEYS` derives it automatically. Add strict bool validation on load, never `bool("false")`. Use `dataclasses.replace(current, **accepted)` for station reconstruction only once accepted values are validated; this avoids dropping the new policy in unrelated CLI branches.
 
-Full status builder and CLI handlers (import all Task 1–3 classes and consent exceptions in their owning modules). Fields on MirrorDocument use `described()` as specified in Interfaces:
+Full status builder and CLI handlers (import all Task 1–4 classes and consent exceptions in their owning modules). Fields on MirrorDocument use `described()` as specified in Interfaces:
 
 ```python
 # interface/mirror.py
 from dataclasses import dataclass
 from typing import ClassVar
-
 from hammunition.interface.envelope import Strict, described
-
 
 @dataclass(frozen=True)
 class MirrorKeyView(Strict):
@@ -1184,7 +1014,6 @@ class MirrorKeyView(Strict):
     algorithm: str = described("OpenSSH algorithm measured from the public key")
     bits: int = described("key size measured by ssh-keygen")
     hardware: bool = described("hardware by sk type or explicitly affirmed by the operator")
-    no_touch_required: bool = described("advertised signature metadata; informational only")
     weak: bool = described("true for RSA of 2048 bits or fewer")
     warning: str | None = described("shared weak-key warning, null for a strong key")
 
@@ -1212,7 +1041,7 @@ def build_mirror(state: MirrorState | None, *, require_hardware: bool,
     warnings: list[str] = []
     for key in state.keys:
         strength = classify(key.public_key)
-        keys.append(MirrorKeyView(key.id, strength.algorithm, strength.bits, key.hardware, key.no_touch_required,
+        keys.append(MirrorKeyView(key.id, strength.algorithm, strength.bits, key.hardware,
                                   strength.weak, strength.warning))
         if strength.warning:
             warnings.append(strength.warning)
@@ -1234,7 +1063,7 @@ def render_mirror(doc: MirrorDocument) -> list[str]:
              f"Accepted serial: {doc.accepted_serial}; catalogue age: {doc.age_days} days",
              f"Hardware key required: {doc.require_hardware}"]
     for key in doc.keys:
-        lines.append(f"{key.id}: {key.algorithm}, {key.bits} bits, {'hardware' if key.hardware else 'file key'}, no_touch_required={key.no_touch_required}")
+        lines.append(f"{key.id}: {key.algorithm}, {key.bits} bits, {'hardware' if key.hardware else 'file key'}")
         if key.warning:
             lines.append(key.warning)
     lines += [warning for warning in doc.warnings if warning not in lines]
@@ -1242,15 +1071,9 @@ def render_mirror(doc: MirrorDocument) -> list[str]:
 
 # cli/main.py
 
-def record_mirror_consent(record: ConsentRecord, *, owner: str | None) -> None:
-    from hammunition.state.log import TransactionLog
-    TransactionLog(owner=owner).append(record.to_log_entry())
-
-
 def cmd_mirror_enrol(args: argparse.Namespace) -> int:
-    from hammunition.signers import SignerError
-
     from hammunition import mirror
+    from hammunition.signers import SignerError
     user = operator(args) or None
     try:
         station = load_station(owner=user)
@@ -1260,8 +1083,7 @@ def cmd_mirror_enrol(args: argparse.Namespace) -> int:
                       choose=input if interactive else None,
                       affirm_hardware=(lambda text: input(text).strip() == "yes") if interactive else None,
                       owner=user, require_hardware=station.mirror_require_hardware_key,
-                      now=datetime.now(UTC),
-                      record_consent=lambda record: record_mirror_consent(record, owner=user))
+                      now=datetime.now(UTC))
     except (SignerError, CatalogueError, BackendError, StationError, ConsentUnavailable, ConsentDeclined) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_UNPLANNABLE
@@ -1272,7 +1094,7 @@ def cmd_mirror_enrol(args: argparse.Namespace) -> int:
 @envelope.json_capable()
 def cmd_mirror_status(args: argparse.Namespace) -> int:
     from hammunition.interface.mirror import build_mirror, render_mirror
-    from hammunition.signers import SignerError, load_mirror
+    from hammunition.signers import load_mirror, SignerError
     try:
         user = operator(args) or None
         station = load_station(owner=user)
@@ -1292,7 +1114,7 @@ def cmd_mirror_status(args: argparse.Namespace) -> int:
 
 def cmd_mirror_accept_older(args: argparse.Namespace) -> int:
     from hammunition.mirror import read_candidate
-    from hammunition.signers import SignerError, load_mirror, save_mirror, verify
+    from hammunition.signers import load_mirror, save_mirror, verify, SignerError
     user = operator(args) or None
     try:
         state = load_mirror(owner=user)
@@ -1336,7 +1158,7 @@ p_older.set_defaults(func=cmd_mirror_accept_older)
 
 `build_parser` uses `sub = parser.add_subparsers(dest="command", required=False)` at lines 8075–8078; insert into that existing object. Add the mutual-exclusive station hardware policy group and parsed defaults False/None consistently with the other boolean setting flags. Neither mirror mutation command gets a `--yes` option. Global --json still returns an error document rather than performing mutation.
 
-`docs/reference/cli.md` is hand-written (there is no CLI-reference generator, and building one is out of scope for #381). Add a hand-written `## mirror` section for `mirror enrol`, `mirror status` and `mirror accept-older` in the page's existing style, `--mirror-require-hardware-key` / `--no-mirror-require-hardware-key` to `station set`, each naming its JSON kind where it prints one. `scripts/check_doc_links.py` must still pass.
+`docs/reference/cli.md` is hand-written (there is no CLI-reference generator, and building one is out of scope for #381). Add a hand-written `## mirror` section for `mirror enrol`, `mirror status` and `mirror accept-older` in the page's existing style, add `--offline` to the `install` and `update` sections and `--mirror-require-hardware-key` / `--no-mirror-require-hardware-key` to `station set`, each naming its JSON kind where it prints one. `scripts/check_doc_links.py` must still pass.
 
 - [ ] Run:
 
@@ -1353,40 +1175,34 @@ Expected PASS; no `--check` writes. Update station JSON goldens only via the exi
 - [ ] Commit:
 
 ```bash
-git add src/hammunition/mirror.py src/hammunition/mirror_transport.py src/hammunition/interface/mirror.py src/hammunition/interface/station.py src/hammunition/cli/main.py src/hammunition/consent/gate.py src/hammunition/consent/__init__.py src/hammunition/station.py tests/test_mirror_cli.py tests/test_station.py tests/test_json_station_hardware.py tests/test_docs_generated.py tests/fixtures/json docs/reference/cli.md docs/reference/json-interface.md docs/guides/station-settings.md
+git add src/hammunition/mirror.py src/hammunition/interface/mirror.py src/hammunition/interface/station.py src/hammunition/cli/main.py src/hammunition/consent/gate.py src/hammunition/consent/__init__.py src/hammunition/station.py tests/test_mirror_cli.py tests/test_station.py tests/test_json_station_hardware.py tests/test_docs_generated.py tests/fixtures/json scripts/gen_json_reference.py docs/reference/cli.md docs/reference/json-interface.md docs/guides/station-settings.md
 git commit -m "feat: enrol Bunker signers with typed fingerprint consent"
 ```
 
 ### Task 4: A4 — One verified catalogue and transport per run
 
 **Files:**
-- Create: `tests/test_bunker_transport.py`.
-- Modify: `src/hammunition/mirror_transport.py` (add `load_catalogue` and `CatalogueInputs`), `tests/test_station_mirror.py` (accepted file URLs and refused malformed URLs).
-- Modify: `src/hammunition/fetch.py:211-253,435-470`, `src/hammunition/station.py:169-210`, `src/hammunition/cli/main.py:4655-4695` (transport construction).
+- Create: `src/hammunition/mirror_transport.py`, `tests/test_bunker_transport.py`.
+- Modify: `src/hammunition/mirror.py` (Task 3 `read_candidate`), `src/hammunition/fetch.py:211-253,435-470`, `src/hammunition/station.py:169-210`, `src/hammunition/cli/main.py:4655-4695` (transport construction).
 - Test: `tests/test_bunker_transport.py`, `tests/test_fetch.py`, `tests/test_mirror_cli.py`.
 
 **Interfaces:**
 - Consumes: Tasks 1–3 `safe_relative`, `Candidate`, `verify`, store; existing `fetch.Transport`, `MirrorPath`, `mirror_url`.
-- Consumes: Task 2 `advance_mirror`, Task 3 `MirrorTransport`, `read_catalogue`, `read_candidate`.
-- Produces: `CatalogueInputs(transport: MirrorTransport)` implements InputTransport; `load_catalogue(state: MirrorState, *, require_hardware: bool, now: datetime, transport: MirrorTransport | None = None, owner: str | None = None) -> VerifiedCatalogue`.
+- Produces: `MirrorTransport(base: str, enrolment_id: str | None = None)` implementing `open(url: str) -> ContextManager[IO[bytes]]`; `read(relative: str, *, max_bytes: int) -> bytes`; `read_catalogue(source: MirrorTransport) -> bytes`; `load_catalogue(state: MirrorState, *, require_hardware: bool, now: datetime, transport: MirrorTransport | None = None, owner: str | None = None) -> VerifiedCatalogue`.
 - Produces: `VerifiedCatalogue` stays the Task 2 type; the CLI creates it once and shares that same object with all resolvers and fetchers. Cache only within this run, not a silently reused persisted unsigned candidate.
 
 - [ ] Write failing transport tests over loopback and a temporary export directory:
 
 ```python
-from datetime import UTC, datetime
 from pathlib import Path
-
-import pytest
-from bunker_fixtures import document, key, signed
-from hammunition.keystrength import classify
+from datetime import UTC, datetime
 from hammunition.mirror_transport import MirrorTransport, load_catalogue
-from hammunition.signers import EnrolledKey, MirrorState, save_mirror
+from hammunition.signers import EnrolledKey, MirrorState
+from hammunition.keystrength import classify
+from bunker_fixtures import document, key, signed
 
 
-def test_file_export_verifies_exact_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    for var in ("XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"):
-        monkeypatch.setenv(var, str(tmp_path / var.lower()))
+def test_file_export_verifies_exact_bytes(tmp_path: Path) -> None:
     private = key(tmp_path)
     public = private.with_suffix(".pub").read_text().strip()
     raw, signatures = signed(tmp_path, private, document(public))
@@ -1398,12 +1214,37 @@ def test_file_export_verifies_exact_bytes(tmp_path: Path, monkeypatch: pytest.Mo
     state = MirrorState(export.as_uri(), "bunker", "personal", None,
                         (EnrolledKey(strength.fingerprint, public, strength.algorithm,
                                      strength.bits, False),), 0)
-    save_mirror(state)
     got = load_catalogue(state, require_hardware=False,
                          now=datetime(2026, 10, 7, tzinfo=UTC))
     assert got.raw == raw and got.catalogue.serial == 42
 ```
 
+Add the concrete concurrent serial test (in Task 4, which defines advance_mirror):
+
+```python
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+import pytest
+from hammunition.signers import EnrolledKey, MirrorState, save_mirror, load_mirror, advance_mirror
+from hammunition.keystrength import classify
+from bunker_fixtures import key
+
+
+def test_concurrent_verifications_preserve_highest_serial(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    private = key(tmp_path)
+    public = private.with_suffix(".pub").read_text().strip()
+    strength = classify(public)
+    enrolled = EnrolledKey(strength.fingerprint, public, strength.algorithm, strength.bits, False)
+    state = MirrorState("http://bunker.invalid", "bunker", "personal", None, (enrolled,), 42)
+    save_mirror(state)
+    def advance(serial: int) -> None:
+        advance_mirror(state, serial, "2026-10-07T12:00:00Z")
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        list(executor.map(advance, [44, 43]))
+    current = load_mirror()
+    assert current is not None and current.accepted_serial == 44
+```
 
 Use `ThreadingHTTPServer` bound to `127.0.0.1` in a local fixture defined in this test file, recording `self.headers.get("X-Hammunition-Enrolment")` for catalogue/signature/input/artifact requests. Assert the supplied id on every request. A 302 to a second loopback server must refuse and that server must see **zero requests**. A `file://other-host/path`, query/fragment, symlinked file/parent component, `../`, `%2e%2e`, empty segment, backslash and absolute relative path each refuse. Group filter ignores `owner:other` even when its bytes are present; personal mode uses it. An absent/bad signature refuses without advancing serial; good verification persists `max(old, new)` once. Verify 32 MiB/64 KiB bounds and one catalogue GET when two resolver families use it.
 
@@ -1411,9 +1252,8 @@ Use `ThreadingHTTPServer` bound to `127.0.0.1` in a local fixture defined in thi
 
 ```python
 import pytest
-from hammunition.mirror import read_candidate
-
 from hammunition.backends import BackendError
+from hammunition.mirror import read_candidate
 
 
 class MissingCatalogue(MirrorTransport):
@@ -1435,9 +1275,30 @@ def test_missing_catalogue_has_exact_remedy(monkeypatch: pytest.MonkeyPatch) -> 
 Also call the shared reader with `MissingCatalogue` in the loader test: enrolment and offline loading must use identical wording. Expected pre-fix FAIL: the message is only `HTTP 404`.
 
 - [ ] Run: `.venv/bin/pytest tests/test_bunker_transport.py -q`; expected FAIL: module missing.
-- [ ] Implement the catalogue loader; import Task 2 advance_mirror and Task 3 shared reader/transport. The bounded read method is already defined once in Task 3:
+- [ ] Implement the full bounded read method and catalogue loader:
 
 ```python
+def read_catalogue(source: MirrorTransport) -> bytes:
+    try:
+        return source.read("catalogue.json", max_bytes=32 * 1024 * 1024)
+    except BackendError as exc:
+        url = source.base.rstrip("/") + "/catalogue.json"
+        raise BackendError(
+            f"no catalogue at {url}: {exc}. "
+            "Enrol a Bunker that serves one, or run without --offline."
+        ) from exc
+
+
+def read(self, relative: str, *, max_bytes: int) -> bytes:
+    relative = safe_relative(relative, "mirror path")
+    url = self.base.rstrip("/") + "/" + "/".join(quote(p, safe="") for p in relative.split("/"))
+    with self.open(url) as stream:
+        raw = stream.read(max_bytes + 1)
+    if len(raw) > max_bytes:
+        raise BackendError(f"{relative}: larger than {max_bytes} bytes")
+    return raw
+
+
 def load_catalogue(state: MirrorState, *, require_hardware: bool, now: datetime,
                    transport: MirrorTransport | None = None,
                    owner: str | None = None) -> VerifiedCatalogue:
@@ -1454,193 +1315,194 @@ def load_catalogue(state: MirrorState, *, require_hardware: bool, now: datetime,
         except BackendError:
             continue  # another enrolled signature can still verify
     verified = verify(raw, signatures, state, require_hardware=require_hardware, now=now)
-    advance_mirror(state, parsed.serial, parsed.generated, owner=owner)
+    save_mirror(replace(state, accepted_serial=max(state.accepted_serial, parsed.serial),
+                        generated=parsed.generated, mode=parsed.bunker.mode), owner=owner)
     return verified
 ```
 
 `MirrorTransport.open` is separate from `UrllibTransport`: publisher transport still refuses file URLs. For HTTP, require the exact configured scheme/netloc and path-prefix, build an opener with HTTP/HTTPS/error handlers and **no redirect handler**, and create a Request with User-Agent plus the enrolment header. Handle HTTPError/URLError/OSError as existing transport does. For file, require empty netloc, absolute base path, no credentials/query/fragment; validate decoded relative segments after URL parsing, walk each component using `os.open(..., dir_fd=..., O_NOFOLLOW)` from an opened export directory, and yield `os.fdopen(fd, "rb")` only for a regular final file. Close every descriptor on failure. This prevents a signed or unsigned path from reading an arbitrary local file. `http -> file` redirects remain refused.
 
-Task 3 owns the transport implementation; its module imports `contextmanager`, `Iterator`, `IO`, `os`, `stat`, `urllib.request/error/parse`; `quote`, `urlsplit`, `unquote` are from urllib.parse):
+Full transport implementation (imports `contextmanager`, `Iterator`, `IO`, `os`, `stat`, `urllib.request/error/parse`; `quote`, `urlsplit`, `unquote` are from urllib.parse):
 
-MirrorTransport is defined once in Task 3; Task 4 consumes it.
+```python
+class MirrorTransport:
+    def __init__(self, base: str, enrolment_id: str | None = None) -> None:
+        self.base = _check_mirror(base).rstrip("/")
+        self.parts = urlsplit(self.base)
+        if enrolment_id is not None and not valid_enrolment_id(enrolment_id):
+            raise BackendError("invalid enrolment id")
+        self.enrolment_id = enrolment_id
+        self.opener = urllib.request.OpenerDirector()
+        for handler in (urllib.request.HTTPHandler(), urllib.request.HTTPSHandler(),
+                        urllib.request.HTTPErrorProcessor(), urllib.request.HTTPDefaultErrorHandler()):
+            self.opener.add_handler(handler)
 
-Move `file:///srv/bunker` from the refused cases in `tests/test_station_mirror.py` to accepted parametrization; retain credentials/query/fragment refusals. Add the file branch to `_check_mirror` before the ordinary host check: require empty netloc, absolute nonempty decoded path with no `.`/`..` segment, no query/fragment, and no whitespace/NUL; return the original normalized URL. Keep `MIRROR_SCHEMES = ("http", "https", "file")`, but keep publisher `fetch.ALLOWED_SCHEMES` HTTP(S)-only. A percent-encoded path prefix is matched before unquoting and is walked by decoded segments; double-encoded traversal remains a literal filename, never decoded twice.
+    @contextmanager
+    def open(self, url: str) -> Iterator[IO[bytes]]:
+        parts = urlsplit(url)
+        prefix = self.parts.path.rstrip("/") + "/"
+        if (parts.scheme, parts.netloc) != (self.parts.scheme, self.parts.netloc) or not parts.path.startswith(prefix) or parts.query or parts.fragment:
+            raise BackendError("mirror request leaves the configured base")
+        relative = safe_relative(unquote(parts.path[len(prefix):]), "mirror request")
+        if parts.scheme == "file":
+            directory = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+            fd = -1
+            try:
+                components = [*Path(unquote(self.parts.path)).parts[1:], *relative.split("/")]
+                for index, component in enumerate(components):
+                    safe_relative(component, "file mirror component")
+                    flags = os.O_RDONLY | os.O_NOFOLLOW
+                    if index < len(components) - 1:
+                        flags |= os.O_DIRECTORY
+                    child = os.open(component, flags, dir_fd=directory)
+                    os.close(directory)
+                    directory = child
+                fd, directory = directory, -1
+                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                    raise BackendError("file mirror target is not a regular file")
+                stream = os.fdopen(fd, "rb")
+                fd = -1
+                with stream:
+                    yield stream
+            except OSError as exc:
+                raise BackendError(f"file mirror {relative}: {exc}") from exc
+            finally:
+                if directory >= 0:
+                    os.close(directory)
+                if fd >= 0:
+                    os.close(fd)
+            return
+        headers = {"User-Agent": "hammunition"}
+        if self.enrolment_id is not None:
+            headers["X-Hammunition-Enrolment"] = self.enrolment_id
+        try:
+            response = self.opener.open(urllib.request.Request(url, headers=headers), timeout=MIRROR_TIMEOUT)
+            if response is None:
+                raise BackendError("no mirror transport handler")
+            with response:
+                yield response
+        except urllib.error.HTTPError as exc:
+            raise BackendError(f"mirror returned HTTP {exc.code}; redirects are not followed") from exc
+        except (urllib.error.URLError, OSError) as exc:
+            raise TransportUnreachable(f"mirror could not be reached: {exc}") from exc
 
-Task 2’s `advance_mirror` is consumed here; Task 3’s `read_candidate` already uses the shared transport. `file://` is the only new base scheme in this task.
+    # Include read() from the preceding block inside this class.
+```
+
+Add the file branch to `_check_mirror` before the ordinary host check: require empty netloc, absolute nonempty decoded path with no `.`/`..` segment, no query/fragment, and no whitespace/NUL; return the original normalized URL. Keep `MIRROR_SCHEMES = ("http", "https", "file")`, but keep publisher `fetch.ALLOWED_SCHEMES` HTTP(S)-only. A percent-encoded path prefix is matched before unquoting and is walked by decoded segments; double-encoded traversal remains a literal filename, never decoded twice.
+
+`advance_mirror(state: MirrorState, serial: int, generated: str, *, owner: str | None = None) -> None` must lock/re-read and merge max serial, while refusing if URL/name/keys changed during verification. Implement it by extracting Task 2's atomic write body to `write_state(directory: int, filename: str, state: MirrorState, owner: str | None) -> None` (full body is the temporary/write/replace section above). Under one lock, check current identity/keys, retain the greater serial and its matching generated timestamp, then call write_state. `load_catalogue` calls this updater instead of save_mirror, so a competing verification of serial 44 cannot be overwritten by serial 43.
+
+```python
+def write_state(directory: int, filename: str, state: MirrorState,
+                owner: str | None) -> None:
+    temporary = f".mirror-{secrets.token_hex(12)}"
+    try:
+        fd = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW,
+                     0o600, dir_fd=directory)
+        with os.fdopen(fd, "wb") as stream:
+            if os.geteuid() == 0:
+                os.fchown(stream.fileno(), *store_uid(owner))
+            stream.write((json.dumps(asdict(state), ensure_ascii=False) + "\n").encode())
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, filename, src_dir_fd=directory, dst_dir_fd=directory)
+        os.fsync(directory)
+    finally:
+        try:
+            os.unlink(temporary, dir_fd=directory)
+        except FileNotFoundError:
+            pass
+
+
+def advance_mirror(state: MirrorState, serial: int, generated: str, *,
+                   owner: str | None = None) -> None:
+    target = mirror_path(owner)
+    with store_lock(target, owner) as directory:
+        current = read_state(directory, target.name, owner)
+        if current is None or (current.url, current.name, current.keys, current.enrolment_id) != (state.url, state.name, state.keys, state.enrolment_id):
+            raise SignerError("mirror enrolment changed during verification; retry the command")
+        if serial > current.accepted_serial:
+            updated = replace(current, accepted_serial=serial, generated=generated)
+            write_state(directory, target.name, validate_state(updated), owner)
+```
+
+Replace the `save_mirror(replace(...))` call in load_catalogue with `advance_mirror(state, parsed.serial, parsed.generated, owner=owner)`; retain the same verified return object. For equal serial, preserve stored timestamp if present, filling it only when absent after validation. Never replace stored mode from a catalogue until it has verified.
+
+ An explicit `accept-older` remains the only lowering path.
+
+Extend `_check_mirror` with this explicit file-base branch; maintain old HTTP(S) validation. Replace Task 3 `read_candidate` with a `MirrorTransport` call (same parse/bounds, all advertised signatures; no trust yet).
+
+```python
+def read_candidate(url: str, enrolment_id: str | None) -> Candidate:
+    source = MirrorTransport(url, enrolment_id)
+    raw = read_catalogue(source)
+    parsed = parse(raw)
+    signatures: dict[str, bytes] = {}
+    for signer in parsed.signers:
+        try:
+            signatures[signer.signature] = source.read(signer.signature, max_bytes=64 * 1024)
+        except BackendError:
+            continue
+    return Candidate(raw, signatures)
+```
 
 `mirror.py` imports `read_catalogue` alongside `MirrorTransport`; the loader uses it before parsing, and a signature failure retains its separate verification error.
 
-For resolution input IO, provide this boundary adapter in mirror_transport.py; ResolutionContext stores it as InputTransport so the leaf need not import backend exceptions:
-
-```python
-@dataclass(frozen=True)
-class CatalogueInputs:
-    transport: MirrorTransport
-
-    def read(self, relative: str, *, max_bytes: int) -> bytes:
-        try:
-            return self.transport.read(relative, max_bytes=max_bytes)
-        except BackendError as exc:
-            raise OSError(str(exc)) from exc
-```
-
-CLI creates `CatalogueInputs(transport)` for context.inputs; direct test assignments wrap MirrorTransport with the same adapter.
-
  In normal download fetchers, use this mirror transport when state URL matches station URL, leaving `transport` as the publisher-only transport. Group filtering is a reader lookup, never a different parse model. Do not add `X-Hammunition-Enrolment` to `UrllibTransport`.
 
-- [ ] Run: `.venv/bin/pytest tests/test_bunker_transport.py tests/test_fetch.py tests/test_mirror_cli.py tests/test_station_mirror.py -q`; expected PASS.
+- [ ] Run: `.venv/bin/pytest tests/test_bunker_transport.py tests/test_fetch.py tests/test_mirror_cli.py -q`; expected PASS.
 - [ ] Commit:
 
 ```bash
-git add src/hammunition/mirror_transport.py src/hammunition/fetch.py src/hammunition/station.py src/hammunition/cli/main.py tests/test_bunker_transport.py tests/test_station_mirror.py
+git add src/hammunition/mirror_transport.py src/hammunition/mirror.py src/hammunition/fetch.py src/hammunition/station.py src/hammunition/cli/main.py tests/test_bunker_transport.py
 git commit -m "feat: read one verified Bunker catalogue over HTTP or file"
 ```
 
 ### Task 5: A5 — Resolution context, offline flags and exhausted-retry fallback
 
 **Files:**
-- Create: `src/hammunition/resolution.py`, `tests/test_offline_context.py`.
-- Modify: `src/hammunition/catalogue.py` (shared PublisherUnavailable exception), `src/hammunition/retry.py:90-110,177-221,287-358`; `src/hammunition/plan.py:110-138,276-299,1273-1325`; `src/hammunition/cli/main.py:1128-1400,4538-4760,4810-4910,8620-8700`; `src/hammunition/interface/plan.py:713-801,1264-1410` (build/render), `src/hammunition/interface/update.py:1-146` (offline disclosure); `src/hammunition/fetch.py:435-531` (offline source enforcement), `tests/bunker_fixtures.py` (create `make_context` here), `docs/reference/cli.md` (hand-edit offline flags), `docs/reference/json-interface.md` (regenerate).
+- Create: `src/hammunition/offline.py`, `tests/test_offline_context.py`.
+- Modify: `src/hammunition/retry.py:90-110,177-221,287-358`; `src/hammunition/plan.py:110-138,276-299,1273-1325`; `src/hammunition/cli/main.py:1128-1400,4538-4760,4810-4910,8620-8700`; `src/hammunition/interface/plan.py:713-801,1264-1410` (build/render), `src/hammunition/interface/update.py:1-146` (offline disclosure); `src/hammunition/fetch.py:435-531` (offline source enforcement).
 - Test: `tests/test_offline_context.py`, `tests/test_retry.py`, `tests/test_json_plan.py`, `tests/test_update.py`.
 
 **Interfaces:**
 - Consumes: `VerifiedCatalogue`, `MirrorState`, `load_catalogue`, `retry.PublisherUnavailable(url: str, answer: str, attempts: int)`, `plan.REQUESTED_DIRECTLY`, `plan.Deferral`, `plan.Blocker`, `plan.PlanError`.
-- Produces: `CatalogueMiss(ValueError)`; `ResolutionContext(offline: bool = False, verified: VerifiedCatalogue | None = None, enrolment_id: str | None = None, inputs: InputTransport | None = None, notes: dict[tuple[str, str], str] = ...)`.
-- Produces methods: `entry(unit: str, name: str) -> CatalogueArtifact`, `choose(unit: str, name: str, online: Callable[[], T], recorded: Callable[[], T]) -> T`, `note(unit: str, name: str, *, fallback: bool) -> str`, `require_payload(unit: str, name: str, *, sha256: str | None = None, size: int | None = None) -> CatalogueArtifact`, `unverified(unit: str, name: str) -> CatalogueArtifact`; plan.py produces `catalogue_deferral`, `preflight_data`, `cached_data_pin`; bunker_fixtures produces `make_context`; `resolve(..., resolution_context: ResolutionContext | None = None) -> InstallPlan` (existing other arguments unchanged).
+- Produces: `CatalogueMiss(ValueError)`; `ResolutionContext(offline: bool = False, verified: VerifiedCatalogue | None = None, enrolment_id: str | None = None, inputs: MirrorTransport | None = None, notes: dict[tuple[str, str], str] = ...)`.
+- Produces methods: `entry(unit: str, name: str) -> CatalogueArtifact`, `choose(unit: str, name: str, online: Callable[[], T], recorded: Callable[[], T]) -> T`, `note(unit: str, name: str, *, fallback: bool) -> str`, `require_payload(unit: str, name: str, *, sha256: str | None = None, size: int | None = None) -> CatalogueArtifact`; `resolve(..., resolution_context: ResolutionContext | None = None) -> InstallPlan` (existing other arguments unchanged).
 - Produces: `Fetcher(..., offline: bool = False)`; offline `sources_for` is mirror-only; missing mirror/path is a named refusal. `install --offline`, `update --offline`; `update --offline --upstream` and `install --offline --no-mirror` refuse incompatible flags.
-
-Define `make_context(tmp_path: Path, rows: list[dict[str, object]], *, offline: bool = True, inputs: list[dict[str, object]] | None = None) -> ResolutionContext` in `tests/bunker_fixtures.py`: generate an ed25519 key, call `signed(document(..., artifacts=rows, inputs=inputs or []))`, build a Task 2 state, call `verify` with the fixed 2026-10-07 UTC clock and return context; its transport is supplied separately for input tests. Use a unique child tmp directory per call to avoid key-file overwrite prompts.
-
-```python
-# tests/bunker_fixtures.py: complete context factory, imported by offline tests.
-def make_context(tmp_path: Path, rows: list[dict[str, object]], *, offline: bool = True,
-                 inputs: list[dict[str, object]] | None = None) -> ResolutionContext:
-    import tempfile
-    from datetime import UTC, datetime
-
-    from hammunition.resolution import ResolutionContext
-    from hammunition.signers import EnrolledKey, MirrorState, verify
-    tmp_path.mkdir(parents=True, exist_ok=True)
-    child = Path(tempfile.mkdtemp(prefix="signing-", dir=tmp_path))
-    private = key(child)
-    public = private.with_suffix(".pub").read_text().strip()
-    strength = classify(public)
-    enrolled = EnrolledKey(strength.fingerprint, public, strength.algorithm, strength.bits, False)
-    state = MirrorState("http://bunker.invalid", "bunker", "personal", None, (enrolled,), 0)
-    raw, sigs = signed(child, private, document(public, artifacts=rows, inputs=inputs or []))
-    verified = verify(raw, sigs, state, now=datetime(2026, 10, 7, tzinfo=UTC))
-    return ResolutionContext(offline=offline, verified=verified)
-```
-
-Import `ResolutionContext` under TYPE_CHECKING at module level for the helper's return annotation, and add `from __future__ import annotations` as the first import in the fixture module. Consolidate each task’s code blocks into their named modules with one sorted import section; retain imports actually used by that module and remove unused ones. Helper definitions appear once. Each test owns its signing directory; tests do not put keys in a checked-in fixture folder.
-
 
 - [ ] Write failing test pinning both the exact wording and the final-error boundary:
 
 ```python
+from hammunition.offline import ResolutionContext
+from hammunition.retry import RetryPolicy, PublisherUnavailable
 import pytest
-from hammunition.resolution import ResolutionContext
-
-from hammunition.retry import PublisherUnavailable, RetryPolicy
 
 
-def test_fallback_only_after_retry_exhaustion(tmp_path: Path) -> None:
-    from bunker_fixtures import artifact, make_context
-    ctx = make_context(tmp_path, [artifact("osm-regions", "europe/monaco", b"stored")], offline=False)
-    seen: list[str] = []
+def test_fallback_only_after_retry_exhaustion() -> None:
+    ctx = ResolutionContext()
+    seen = []
     policy = RetryPolicy(attempts=3, sleep=lambda _: None, notify=lambda _: None)
-    def unavailable() -> int:
+    def unavailable():
         seen.append("publisher")
         raise TimeoutError("dead link")
-    def recorded() -> int:
-        return ctx.require_payload("osm-regions", "europe/monaco").size or 0
-    got = ctx.choose("osm-regions", "europe/monaco",
-                     lambda: policy.call("https://example.invalid/x", unavailable), recorded)
-    assert got == len(b"stored")
+    with pytest.raises(PublisherUnavailable):
+        ctx.choose("osm-regions", "europe/monaco",
+                   lambda: policy.call("https://example.invalid/x", unavailable), lambda: "stored")
     assert seen == ["publisher"] * 3
-    assert ctx.verified is not None
-    assert ctx.notes[("osm-regions", "europe/monaco")] == (
-        f"publisher unreachable; resolved from Bunker bunker ({ctx.verified.key.id}), "
-        "recorded 2026-10-07T12:00:00Z"
-    )
 
 
-def test_offline_never_calls_online(tmp_path: Path) -> None:
-    from bunker_fixtures import make_context
-    ctx = make_context(tmp_path, [], offline=True)
-    def forbidden() -> str:
+def test_offline_never_calls_online() -> None:
+    ctx = ResolutionContext(offline=True)
+    def forbidden():
         pytest.fail("offline called a publisher")
     assert ctx.choose("osm-regions", "europe/monaco", forbidden, lambda: "pin") == "pin"
-
-
-def test_offline_without_catalogue_refuses_before_callbacks() -> None:
-    from hammunition.resolution import CatalogueMiss
-    def forbidden() -> str:
-        pytest.fail("missing catalogue must refuse before callbacks")
-    with pytest.raises(CatalogueMiss, match="hammunition mirror enrol URL"):
-        ResolutionContext(offline=True).choose("osm-regions", "europe/monaco", forbidden, forbidden)
 ```
 
 Add a real signed-catalogue context fixture in this file using Tasks 1–2 helpers: its `choose` after exhaustion returns stored value; `note` equals `publisher unreachable; resolved from Bunker bunker (<fingerprint>), recorded 2026-10-07T12:00:00Z`. Test a TLS certificate error and HTTP 404 are not fallback events (neither is `PublisherUnavailable`). Missing entry raises `not on Bunker bunker, publisher unreachable`; same event for a profile member creates a D-039 deferral, directly requested unit gives `PlanError`, and a unit with one of two needed artifacts missing gets **no install steps**. With no enrolment and no offline flag, existing outage tests and text goldens stay unchanged. Offline with no enrolment names `hammunition mirror enrol URL` before apt probes. Offline update reads local apt lists/install records and never invokes upstream helpers; even an empty update request validates the flag first. Installed publisher rechecks are skipped in offline mode even under `--recheck`.
 
 - [ ] Run: `.venv/bin/pytest tests/test_offline_context.py -q`; expected FAIL: module missing.
-`resolution.py` is a leaf: runtime imports are stdlib, catalogue, signers and keystrength only. Define `PublisherUnavailable` in catalogue with its existing fields/constructor unchanged, and re-export it from retry.py (all callers retain identity). Resolution imports that exception from catalogue. Resolver modules import CatalogueMiss at runtime and ResolutionContext under TYPE_CHECKING. Keep `catalogue_deferral`, `preflight_data` and `cached_data_pin` in plan.py, which already owns backend-dependent planning. Add a fresh-interpreter test importing geofabrik, copernicus, ustopo, usgs3dep, fstopo, resolution and plan in both orders.
-
-```python
-@pytest.mark.parametrize("reverse", [False, True])
-def test_resolution_imports_have_no_cycle(reverse: bool) -> None:
-    import subprocess
-    import sys
-    modules = ["geofabrik", "copernicus", "ustopo", "usgs3dep", "fstopo", "resolution", "plan"]
-    if reverse:
-        modules.reverse()
-    script = "; ".join("import hammunition." + module for module in modules)
-    subprocess.run([sys.executable, "-c", script], check=True, capture_output=True, text=True)
-```
-
-Move this existing exception unchanged into catalogue.py (import urllib.parse there), remove the old class from retry.py and use `from hammunition.catalogue import PublisherUnavailable as PublisherUnavailable` there:
-
-```python
-class PublisherUnavailable(OSError):
-    """A publisher did not answer a probe after every retry.
-
-    ``answer`` is the last thing it said (``HTTP 503 Service Unavailable``,
-    ``timed out``); ``attempts`` how many times it was asked."""
-
-    def __init__(self, url: str, answer: str, attempts: int) -> None:
-        self.url = url
-        self.host = urllib.parse.urlsplit(url).hostname or url
-        self.answer = answer
-        self.attempts = attempts
-        tries = f"{attempts} attempt{'s' if attempts != 1 else ''}"
-        super().__init__(
-            f"{url}: the publisher is not answering right now (its last answer after "
-            f"{tries}: {answer})"
-        )
-```
-
-```python
-# resolution.py imports and the structural transport/probe annotations.
-from __future__ import annotations
-
-from collections.abc import Callable
-from dataclasses import dataclass, field
-from pathlib import Path
-from threading import Lock
-from typing import Protocol, TypeVar
-
-from hammunition.catalogue import CatalogueArtifact, PublisherUnavailable
-from hammunition.signers import VerifiedCatalogue
-
-T = TypeVar("T")
-
-class InputTransport(Protocol):
-    def read(self, relative: str, *, max_bytes: int) -> bytes: ...
-
-class TextProbe(Protocol):
-    def text(self, url: str) -> str: ...
-```
-
 - [ ] Implement complete new context functions (import the Task 1–4 types and `T = TypeVar("T")`):
 
 ```python
@@ -1648,7 +1510,6 @@ class CatalogueMiss(ValueError):
     pass
 
 
-# plan.py, never resolution.py (depends on the planning/backend types).
 def catalogue_deferral(unit: PlannedPackage, exc: CatalogueMiss) -> Deferral:
     remedy = "populate this selection on the Bunker, or retry with the publisher reachable"
     if REQUESTED_DIRECTLY in unit.requested_by:
@@ -1663,9 +1524,8 @@ class ResolutionContext:
     offline: bool = False
     verified: VerifiedCatalogue | None = None
     enrolment_id: str | None = None
-    inputs: InputTransport | None = None
+    inputs: MirrorTransport | None = None
     notes: dict[tuple[str, str], str] = field(default_factory=dict)
-    _notes_lock: Lock = field(default_factory=Lock, init=False, repr=False)
 
     def entry(self, unit: str, name: str) -> CatalogueArtifact:
         if self.verified is None:
@@ -1686,12 +1546,6 @@ class ResolutionContext:
             raise CatalogueMiss(f"{unit}/{name}: Bunker copy does not match the expected size")
         return row
 
-    def unverified(self, unit: str, name: str) -> CatalogueArtifact:
-        row = self.entry(unit, name)
-        if row.publisher_check not in ("unverified-fetch", "unverified-zip"):
-            raise CatalogueMiss(f"{unit}/{name}: expected an explicitly unverified catalogue entry")
-        return row
-
     def note(self, unit: str, name: str, *, fallback: bool) -> str:
         if self.verified is None:
             raise CatalogueMiss("no Bunker enrolled; hammunition mirror enrol URL")
@@ -1701,14 +1555,11 @@ class ResolutionContext:
                 f"recorded {v.catalogue.generated}")
         if v.warnings:
             text += "; " + "; ".join(v.warnings)
-        with self._notes_lock:
-            self.notes[(unit, name)] = text
+        self.notes[(unit, name)] = text
         return text
 
     def choose(self, unit: str, name: str, online: Callable[[], T],
                recorded: Callable[[], T]) -> T:
-        if self.offline and self.verified is None:
-            raise CatalogueMiss("no Bunker enrolled; hammunition mirror enrol URL")
         if not self.offline:
             try:
                 return online()
@@ -1728,13 +1579,12 @@ Static-data availability has its own failing test in `tests/test_offline_context
 
 ```python
 from pathlib import Path
-
-from bunker_fixtures import make_context
-
 from hammunition.distro import Target
 from hammunition.manifest.load import load_catalog
 from hammunition.manifest.schema import DataInstall
-from hammunition.plan import InstallPlan, PlannedPackage, preflight_data
+from hammunition.plan import InstallPlan, PlannedPackage
+from hammunition.offline import preflight_data
+from bunker_fixtures import make_context
 
 
 def test_missing_static_profile_data_defers_whole_unit(tmp_path: Path) -> None:
@@ -1749,30 +1599,7 @@ def test_missing_static_profile_data_defers_whole_unit(tmp_path: Path) -> None:
     assert "not on Bunker bunker, publisher unreachable" in got.deferrals[0].why
 ```
 
-Exercise the actual RegisterInstall preflight branch in the same test file:
-
-```python
-def test_register_preflight_requires_explicit_unverified_label(tmp_path: Path) -> None:
-    import pytest
-    from bunker_fixtures import artifact
-
-    from hammunition.manifest.schema import RegisterInstall
-    catalog = load_catalog(Path(__file__).resolve().parents[1] / "catalog/packages")
-    manifest = catalog["acma-register"]
-    block = next(block for block in manifest.install if isinstance(block.install, RegisterInstall))
-    unit = PlannedPackage(manifest, block, (), requested_by=("reference",))
-    plan = InstallPlan(Target(distro="debian", version="13", arch="x86_64"), (unit,))
-    row = artifact("acma-register", "spectra_rrl.zip", b"zip", publisher_check="unverified-zip")
-    context = make_context(tmp_path, [row])
-    result = preflight_data(plan, context, cached=lambda unit, pin: False)
-    assert result.packages == (unit,) and not result.deferrals
-    assert context.unverified("acma-register", "spectra_rrl.zip").publisher_check == "unverified-zip"
-    wrong = make_context(tmp_path, [artifact("acma-register", "spectra_rrl.zip", b"zip")])
-    refused = preflight_data(plan, wrong, cached=lambda unit, pin: False)
-    assert not refused.packages and "explicitly unverified" in refused.deferrals[0].why
-```
-
-Add the complete preflight helper to plan.py; call it after the existing local attribution determines which data actions are required, before printing/executing any commands:
+Add the complete preflight helper to offline.py; call it after the existing local attribution determines which data actions are required, before printing/executing any commands:
 
 ```python
 def preflight_data(plan: InstallPlan, context: ResolutionContext, *,
@@ -1834,18 +1661,18 @@ def sources_for(self, url: str, mirror: MirrorPath | None) -> tuple[tuple[str, s
 
 At the end of `_from_sources`, replace the “publisher always last” assertion with `BackendError(f"offline Bunker download failed: {passed_over or self._mirror_down}")`; retain the assertion only for an impossible online loop fallthrough. Offline mirrors that fail digest verification discard bytes and refuse, never ask publishers. Fix `fetch_disclosure`'s one-source branch: its returned detail/source must be the mirror URL in offline mode, and wording must say “Bunker only”; no phantom publisher in `Action.sources`.
 
-- [ ] Run: `.venv/bin/pytest tests/test_offline_context.py tests/test_retry.py tests/test_fetch_mirror.py tests/test_json_plan.py tests/test_update.py -q`; expected PASS; hand-edit `cli.md` for `--offline`, regenerate the JSON reference with `scripts/gen_json_reference.py`, then run its `--check`.
+- [ ] Run: `.venv/bin/pytest tests/test_offline_context.py tests/test_retry.py tests/test_fetch_mirror.py tests/test_json_plan.py tests/test_update.py -q`; expected PASS; regenerate JSON/CLI references and check both generators.
 - [ ] Commit:
 
 ```bash
-git add src/hammunition/resolution.py src/hammunition/catalogue.py src/hammunition/retry.py src/hammunition/plan.py src/hammunition/fetch.py src/hammunition/cli/main.py src/hammunition/interface/plan.py src/hammunition/interface/update.py tests/bunker_fixtures.py tests/test_offline_context.py tests/test_retry.py tests/test_json_plan.py tests/test_update.py docs/reference/cli.md docs/reference/json-interface.md
+git add src/hammunition/offline.py src/hammunition/retry.py src/hammunition/plan.py src/hammunition/fetch.py src/hammunition/cli/main.py src/hammunition/interface/plan.py src/hammunition/interface/update.py tests/test_offline_context.py tests/test_retry.py tests/test_json_plan.py tests/test_update.py docs/reference/cli.md docs/reference/json-interface.md
 git commit -m "feat: resolve offline and fall back after exhausted publisher retries"
 ```
 
 ### Task 6: A6 — Offline Geofabrik identity and pinned reachability
 
 **Files:**
-- Modify: `src/hammunition/geofabrik.py:162-234` (`resolve`); `tests/test_offline_context.py` (Geofabrik disposition cases), `src/hammunition/cli/main.py:4259-4349` (`resolve_map_regions`), `src/hammunition/backends/regions.py` (fetch-line provenance).
+- Modify: `src/hammunition/geofabrik.py:162-234` (`resolve`); `src/hammunition/cli/main.py:4259-4349` (`resolve_map_regions`), `src/hammunition/backends/regions.py` (fetch-line provenance).
 - Create: `tests/test_offline_geofabrik.py`.
 - Test: `tests/test_geofabrik.py`, `tests/test_offline_geofabrik.py`, `tests/test_cli.py`, `tests/test_terrain_cli.py` (existing map-resolution tests).
 
@@ -1856,14 +1683,12 @@ git commit -m "feat: resolve offline and fall back after exhausted publisher ret
 - [ ] Write failing tests with real signed catalogue context, parametrized latest/monthly:
 
 ```python
+from pathlib import Path
 # tests/test_offline_geofabrik.py; use the signed factory in bunker_fixtures.
 from datetime import date
-from pathlib import Path
-
-from bunker_fixtures import artifact, make_context
-
-from hammunition.geofabrik import BASE, resolve
+from hammunition.geofabrik import resolve, Pin, BASE
 from test_geofabrik import FakeProbe
+from bunker_fixtures import artifact, make_context
 
 
 def test_recorded_latest_has_no_publisher_requests(tmp_path: Path) -> None:
@@ -1879,6 +1704,29 @@ def test_recorded_latest_has_no_publisher_requests(tmp_path: Path) -> None:
     assert probe.seen == []
 ```
 
+Define `make_context(tmp_path: Path, rows: list[dict[str, object]], *, offline: bool = True, inputs: list[dict[str, object]] | None = None) -> ResolutionContext` in `tests/bunker_fixtures.py`: generate an ed25519 key, call `signed(document(..., artifacts=rows, inputs=inputs or []))`, build a Task 2 state, call `verify` with the fixed 2026-10-07 UTC clock and return context; its transport is supplied separately for input tests. Use a unique child tmp directory per call to avoid key-file overwrite prompts.
+
+```python
+# tests/bunker_fixtures.py: complete context factory, imported by offline tests.
+def make_context(tmp_path: Path, rows: list[dict[str, object]], *, offline: bool = True,
+                 inputs: list[dict[str, object]] | None = None) -> ResolutionContext:
+    from datetime import UTC, datetime
+    import tempfile
+    from hammunition.offline import ResolutionContext
+    from hammunition.signers import EnrolledKey, MirrorState, verify
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    child = Path(tempfile.mkdtemp(prefix="signing-", dir=tmp_path))
+    private = key(child)
+    public = private.with_suffix(".pub").read_text().strip()
+    strength = classify(public)
+    enrolled = EnrolledKey(strength.fingerprint, public, strength.algorithm, strength.bits, False)
+    state = MirrorState("http://bunker.invalid", "bunker", "personal", None, (enrolled,), 0)
+    raw, sigs = signed(child, private, document(public, artifacts=rows, inputs=inputs or []))
+    verified = verify(raw, sigs, state, now=datetime(2026, 10, 7, tzinfo=UTC))
+    return ResolutionContext(offline=offline, verified=verified)
+```
+
+Import `ResolutionContext` under TYPE_CHECKING at module level for the helper's return annotation, and use `from __future__ import annotations` in the fixture module. Each test owns its signing directory; tests do not put keys in a checked-in fixture folder.
 
  Tests also cover monthly first/previous only (an unrelated stale snapshot is not silently substituted), publisher-name/URL snapshot disagreement, wrong region, zero size, MD5 of wrong length, explicit missing region refusal, profile whole-unit deferral, installed region kept, and pinned region returned without HEAD in `resolve_map_regions`. A valid signed sha256 that disagrees with the repository pin must refuse rather than replace the pin.
 
@@ -1933,40 +1781,36 @@ def resolve(region: str, freshness: str, *, today: date,
 - [ ] Commit:
 
 ```bash
-git add src/hammunition/geofabrik.py src/hammunition/cli/main.py src/hammunition/backends/regions.py tests/test_offline_geofabrik.py tests/test_offline_context.py
+git add src/hammunition/geofabrik.py src/hammunition/cli/main.py src/hammunition/backends/regions.py tests/bunker_fixtures.py tests/test_offline_geofabrik.py tests/test_offline_context.py
 git commit -m "feat: resolve Geofabrik snapshots from the enrolled catalogue"
 ```
 
 ### Task 7: A7a — Verified outlines and selection inputs
 
 **Files:**
-- Modify: `src/hammunition/resolution.py` (Task 5 context), `src/hammunition/terrain_plan.py:88-104,196-245`, `src/hammunition/topo_plan.py:66-144,319-359`, `docs/reference/bunker-catalogue.md` (selection codecs).
+- Modify: `src/hammunition/offline.py` (Task 5 context), `src/hammunition/terrain_plan.py:88-104,196-245`, `src/hammunition/topo_plan.py:66-144,319-359`.
 - Create: `tests/test_offline_inputs.py`.
 - Read: `src/hammunition/backends/dem.py:91-141`, `src/hammunition/backends/topo.py:65-101`, `src/hammunition/backends/fstopo.py:46-84` (existing selection codecs), `src/hammunition/topo_bound.py` (`token`, `select`, `wants_region`, `keeps`, `split_bound`).
 
 **Interfaces:**
-- Consumes: `Catalogue.input`, Task 4 `CatalogueInputs.read`, existing `parse_poly`, each backend's `read_record(path: Path, region: str, slug: str)` / `render_record(entry)` and bound token.
-- Produces context methods: `input_bytes(kind: str, region: str) -> bytes`, `selection(kind: str, region: str, reader: Callable[[Path, str, str], T | None]) -> T | None`, `outline(region: str, probe: TextProbe, *, base: str) -> str`.
+- Consumes: `Catalogue.input`, `MirrorTransport.read`, existing `parse_poly`, each backend's `read_record(path: Path, region: str, slug: str)` / `render_record(entry)` and bound token.
+- Produces context methods: `input_bytes(kind: str, region: str) -> bytes`, `selection(kind: str, region: str, reader: Callable[[Path, str, str], T | None]) -> T | None`, `outline(region: str, probe: Probe) -> str`.
 - Produces: resolver optional `context: ResolutionContext | None = None`; these methods are the only route to catalogue inputs. Selection filenames: `<region>.poly` for outline, `<region>.tiles` for Copernicus and 3DEP, `<region>.quads` for US Topo and FSTopo, under distinct contract kinds. The wire entry supplies `name`; consumers look up by kind/region, not extension guesses.
 
 - [ ] Write a failing test using actual bytes and the engine's existing record codec:
 
 ```python
-import hashlib
 from pathlib import Path
-
+import hashlib
 import pytest
+from hammunition.backends.dem import RegionTiles, render_record, read_record
+from hammunition.mirror_transport import MirrorTransport
+from hammunition.offline import CatalogueMiss
 from bunker_fixtures import make_context
-from hammunition.mirror_transport import CatalogueInputs, MirrorTransport
-from hammunition.resolution import CatalogueMiss
-
-from hammunition.backends.dem import RegionTiles
-from hammunition.backends.dem import read_record as read_tiles
-from hammunition.backends.dem import render_record as render_tiles
 
 
 def test_empty_selection_is_valid_and_bad_digest_is_refused(tmp_path: Path) -> None:
-    body = render_tiles(RegionTiles("europe/monaco", "europe-monaco", (), 1)).encode()
+    body = render_record(RegionTiles("europe/monaco", "europe-monaco", (), 1)).encode()
     row = {"kind": "tile-selection", "region": "europe/monaco",
            "name": "europe/monaco.tiles", "path": "inputs/tile-selection/europe/monaco.tiles",
            "sha256": hashlib.sha256(body).hexdigest(), "size": len(body),
@@ -1976,8 +1820,8 @@ def test_empty_selection_is_valid_and_bad_digest_is_refused(tmp_path: Path) -> N
     target = export / "inputs/tile-selection/europe/monaco.tiles"
     target.parent.mkdir(parents=True)
     target.write_bytes(body)
-    context.inputs = CatalogueInputs(MirrorTransport(export.as_uri()))
-    selection = context.selection("tile-selection", "europe/monaco", read_tiles)
+    context.inputs = MirrorTransport(export.as_uri())
+    selection = context.selection("tile-selection", "europe/monaco", read_record)
     assert selection is not None and selection.tiles == () and selection.unpublished == 1
     target.write_bytes(body.replace(b"1", b"2"))
     with pytest.raises(CatalogueMiss, match="sha256"):
@@ -1987,24 +1831,22 @@ def test_empty_selection_is_valid_and_bad_digest_is_refused(tmp_path: Path) -> N
 Pin the wrong-bound case to an actual resolver, not only to the input byte reader:
 
 ```python
-import hashlib
 from pathlib import Path
-
-from bunker_fixtures import make_context
-from hammunition.mirror_transport import CatalogueInputs, MirrorTransport
-
-from hammunition.backends.topo import render_record as render_quads
-from hammunition.topo_bound import ALL, TopoBound
+import hashlib
+from hammunition.backends.topo import RegionQuads, render_record
 from hammunition.topo_plan import region_quads
 from hammunition.ustopo import Quad, QuadIndex
+from hammunition.topo_bound import ALL, TopoBound
+from hammunition.mirror_transport import MirrorTransport
 from test_terrain_plan import RegionProbe
+from bunker_fixtures import make_context
 
 
 def test_bounded_selection_is_not_reused_for_all(tmp_path: Path) -> None:
     # Synthetic geometry, not a claim about Monaco's actual outline.
     region = "europe/monaco"
     quad = Quad(0.0, 0.0, 0.125, 0.125, 3, "a" * 32, "DE/Test_20260101")
-    narrow = render_quads(RegionQuads(region, "europe-monaco", (), TopoBound("none").token))
+    narrow = render_record(RegionQuads(region, "europe-monaco", (), TopoBound("none").token))
     outline = "test\n1\n 0.01 0.01\n 0.10 0.01\n 0.10 0.10\n 0.01 0.10\nEND\nEND\n"
     entries: list[dict[str, object]] = []
     export = tmp_path / "export"
@@ -2020,7 +1862,7 @@ def test_bounded_selection_is_not_reused_for_all(tmp_path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(body)
     context = make_context(tmp_path / "keys", [], inputs=entries)
-    context.inputs = CatalogueInputs(MirrorTransport(export.as_uri()))
+    context.inputs = MirrorTransport(export.as_uri())
     result = region_quads(region, "europe-monaco", installed=tmp_path / "installed",
                            index=QuadIndex.of([quad]), probe=RegionProbe({}), notes=[],
                            bound=ALL, context=context)
@@ -2043,7 +1885,7 @@ def input_bytes(self, kind: str, region: str) -> bytes:
         raise CatalogueMiss(f"inputs/{kind}/{region}: larger than the 32 MiB input bound")
     try:
         body = self.inputs.read(row.path, max_bytes=row.size)
-    except OSError as exc:
+    except BackendError as exc:
         raise CatalogueMiss(f"inputs/{kind}/{region}: {exc}") from exc
     if len(body) != row.size or hashlib.sha256(body).hexdigest() != row.sha256:
         raise CatalogueMiss(f"inputs/{kind}/{region}: size or sha256 does not match the recorded input")
@@ -2065,23 +1907,23 @@ def selection(self, kind: str, region: str,
     return result
 
 
-def outline(self, region: str, probe: TextProbe, *, base: str) -> str:
+def outline(self, region: str, probe: Probe) -> str:
     def recorded() -> str:
         try:
             return self.input_bytes("region-outline", region).decode("utf-8")
         except UnicodeError as exc:
             raise CatalogueMiss(f"inputs/region-outline/{region}: not UTF-8") from exc
     return self.choose("inputs", f"region-outline/{region}",
-                       lambda: probe.text(f"{base}/{region}.poly"), recorded)
+                       lambda: probe.text(f"{BASE}/{region}.poly"), recorded)
 ```
 
-Cache successful input bytes by `(kind, region, sha256)` within context only; recheck before caching, and do not cache failure as an empty input. Avoid touching the prefix/installed selection files during planning. In `region_tiles`, `region_quads`, `region_sheets` and the 3DEP selection branch, prefer a current installed record first; offline or after exhausted outline probe, consult the appropriate catalogue selection. Check it against current carried lists/rows and requested bound; if incompatible, derive from `context.outline(region, probe, base=BASE)` using existing `parse_poly`/index selection functions. Online outline path still uses `MemoProbe` for one fetch. Defer whole units through Task 5 if neither route can supply a complete selection. Document these selection payload codecs in `bunker-catalogue.md` as engine reader APIs for Plan B, without changing the binding JSON contract.
+Cache successful input bytes by `(kind, region, sha256)` within context only; recheck before caching, and do not cache failure as an empty input. Avoid touching the prefix/installed selection files during planning. In `region_tiles`, `region_quads`, `region_sheets` and the 3DEP selection branch, prefer a current installed record first; offline or after exhausted outline probe, consult the appropriate catalogue selection. Check it against current carried lists/rows and requested bound; if incompatible, derive from `context.outline` using existing `parse_poly`/index selection functions. Online outline path still uses `MemoProbe` for one fetch. Defer whole units through Task 5 if neither route can supply a complete selection. Document these selection payload codecs in `bunker-catalogue.md` as engine reader APIs for Plan B, without changing the binding JSON contract.
 
 - [ ] Run: `.venv/bin/pytest tests/test_offline_inputs.py tests/test_terrain_plan.py tests/test_topo_plan.py -q`; expected PASS.
 - [ ] Commit:
 
 ```bash
-git add src/hammunition/resolution.py src/hammunition/terrain_plan.py src/hammunition/topo_plan.py tests/test_offline_inputs.py docs/reference/bunker-catalogue.md
+git add src/hammunition/offline.py src/hammunition/terrain_plan.py src/hammunition/topo_plan.py tests/test_offline_inputs.py docs/reference/bunker-catalogue.md
 git commit -m "feat: read verified Bunker outlines and selection records"
 ```
 
@@ -2100,11 +1942,9 @@ git commit -m "feat: read verified Bunker outlines and selection records"
 
 ```python
 from pathlib import Path
-
-from bunker_fixtures import artifact, make_context
-
-from hammunition.copernicus import resolve_tile, tile_url
-from test_terrain_plan import A, TileProbe
+from hammunition.copernicus import resolve_tile, tile_url, TilePin
+from test_terrain_plan import TileProbe, A
+from bunker_fixtures import make_context, artifact
 
 
 def test_offline_tile_uses_publisher_md5_not_bunker_sha256(tmp_path: Path) -> None:
@@ -2164,12 +2004,10 @@ git commit -m "feat: resolve Copernicus tiles offline without weakening pins"
 
 ```python
 from pathlib import Path
-
-from bunker_fixtures import artifact, make_context
-
-from hammunition.usgs3dep import TileRow, check_tile
 from hammunition.ustopo import Quad, check_quad
+from hammunition.usgs3dep import TileRow, check_tile
 from test_terrain_plan import TileProbe
+from bunker_fixtures import artifact, make_context
 
 
 def test_carried_etag_is_used_without_live_agreement(tmp_path: Path) -> None:
@@ -2180,41 +2018,6 @@ def test_carried_etag_is_used_without_live_agreement(tmp_path: Path) -> None:
     context = make_context(tmp_path, [row])
     probe = TileProbe({})
     check_quad(quad, probe, context=context, unit="usgs-ustopo")
-    assert probe.asked == []
-    assert (quad.size, quad.etag) == (3, "b" * 32)
-    assert ("usgs-ustopo", quad.path) in context.notes
-    missing = make_context(tmp_path, [])
-    with pytest.raises(CatalogueMiss, match="not on Bunker"):
-        check_quad(quad, probe, context=missing, unit="usgs-ustopo")
-```
-
-Concrete 3DEP success and mismatch/missing refusal tests in `tests/test_offline_usgs.py`:
-
-```python
-import pytest
-from hammunition.resolution import CatalogueMiss
-
-from hammunition.usgs3dep import tile_url as threedep_url
-
-
-def test_3dep_keeps_repository_multipart_etag(tmp_path: Path) -> None:
-    tile = TileRow("USGS_13_n39w076", 3, "b" * 32 + "-2")
-    row = artifact("dem-3dep", tile.name, b"tif", publisher_check="etag-md5",
-                   publisher_digest=tile.etag, publisher_url=threedep_url(tile.name))
-    context = make_context(tmp_path, [row])
-    probe = TileProbe({})
-    check_tile(tile, probe, context=context, unit="dem-3dep")
-    assert tile.etag == "b" * 32 + "-2" and tile.size == 3
-    assert probe.asked == [] and ("dem-3dep", tile.name) in context.notes
-
-
-@pytest.mark.parametrize("rows,reason", [(False, "not on Bunker"), (True, "expected size")])
-def test_3dep_catalogue_refuses_missing_or_wrong_size(tmp_path: Path, rows: bool, reason: str) -> None:
-    tile = TileRow("USGS_13_n39w076", 3, "b" * 32 + "-2")
-    context = make_context(tmp_path, [artifact("dem-3dep", tile.name, b"wrong")] if rows else [])
-    probe = TileProbe({})
-    with pytest.raises(CatalogueMiss, match=reason):
-        check_tile(tile, probe, context=context, unit="dem-3dep")
     assert probe.asked == []
 ```
 
@@ -2265,16 +2068,14 @@ git commit -m "feat: use carried USGS sheet and terrain ETags offline"
 
 **Interfaces:**
 - Consumes: `FsQuad`, `FsPin`, `FsQuadFile`, context, Task 7 FSTopo selection.
-- Produces: `recorded_sheet(quad: FsQuad, *, unit: str, pins: Mapping[int, FsPin], context: ResolutionContext) -> FsQuadFile`; `resolve_fstopo(..., context: ResolutionContext | None = None, unit: str | None = None)` with existing return type. Consumes Task 5 `ResolutionContext.unverified(unit: str, name: str) -> CatalogueArtifact`, which verifies recorded trust label and availability, **not content trust**.
+- Produces: `recorded_sheet(quad: FsQuad, *, unit: str, pins: Mapping[int, FsPin], context: ResolutionContext) -> FsQuadFile`; `resolve_fstopo(..., context: ResolutionContext | None = None, unit: str | None = None)` with existing return type. `ResolutionContext.unverified(unit: str, name: str) -> CatalogueArtifact` verifies recorded trust label and availability, **not content trust**.
 
 - [ ] Write failing test:
 
 ```python
 from pathlib import Path
-
-from bunker_fixtures import artifact, make_context
-
 from hammunition.fstopo import FsQuad, recorded_sheet
+from bunker_fixtures import artifact, make_context
 
 
 def test_signed_unpinned_fstopo_stays_unverified(tmp_path: Path) -> None:
@@ -2314,14 +2115,20 @@ def recorded_sheet(quad: FsQuad, *, unit: str, pins: Mapping[int, FsPin],
 
 `unverified` allows only `unverified-fetch` or `unverified-zip` and returns the row; it does not authorize installation.
 
-
+```python
+def unverified(self, unit: str, name: str) -> CatalogueArtifact:
+    row = self.entry(unit, name)
+    if row.publisher_check not in ("unverified-fetch", "unverified-zip"):
+        raise CatalogueMiss(f"{unit}/{name}: expected an explicitly unverified catalogue entry")
+    return row
+```
  Bunker `hold_unverified` is the server's holding policy; the engine retains existing online consent/disclosure gates and structure checks. No new local policy with that name is silently enabled. Wrap the two-request `gateway.locate` + pin-size agreement inside `context.choose`, returning `FsQuadFile` from both branches; old online errors and final HTTP failures remain unchanged. Skip installed publisher rechecks offline. Wire station wrapper and CLI context. Do not follow a fresh gateway redirect offline.
 
 - [ ] Run: `.venv/bin/pytest tests/test_offline_fstopo.py tests/test_fstopo.py tests/test_topo_plan.py -q`; expected PASS.
 - [ ] Commit:
 
 ```bash
-git add src/hammunition/fstopo.py src/hammunition/topo_plan.py src/hammunition/cli/main.py tests/test_offline_fstopo.py
+git add src/hammunition/fstopo.py src/hammunition/topo_plan.py src/hammunition/offline.py src/hammunition/cli/main.py tests/test_offline_fstopo.py
 git commit -m "feat: resolve FSTopo without upgrading unverified data trust"
 ```
 
@@ -2340,11 +2147,9 @@ git commit -m "feat: resolve FSTopo without upgrading unverified data trust"
 
 ```python
 from pathlib import Path
-
+from hammunition.backends.kiwix import resolve_station_books, book_mirror_path
+from hammunition.kiwix import resolve_books, load_book_list, load_pin_file
 from bunker_fixtures import artifact, make_context
-
-from hammunition.backends.kiwix import resolve_station_books
-from hammunition.kiwix import load_book_list, load_pin_file, resolve_books
 
 
 def test_pinned_book_does_not_head_publisher(tmp_path: Path) -> None:
@@ -2354,7 +2159,7 @@ def test_pinned_book_does_not_head_publisher(tmp_path: Path) -> None:
     row = artifact("kiwix-library", book_id, b"unused", sha256=book.pin.sha256,
                    size=book.pin.size, publisher_url=book.pin.url)
     context = make_context(tmp_path / "keys", [row])
-    def forbidden(url: str) -> int:
+    def forbidden(url):
         raise AssertionError("offline Kiwix asked publisher")
     got = resolve_station_books([book_id], root, installed=tmp_path / "books",
                                 head=forbidden, context=context, unit="kiwix-library")
@@ -2397,8 +2202,6 @@ git commit -m "feat: resolve pinned Kiwix books and CoMaps maps offline"
 - Create: `tests/test_fetch_bunker_etag_sized.py`.
 - Test: `tests/test_fetch_mirror.py`, `tests/test_topo_backend.py`, `tests/test_fstopo_backend.py`.
 
-- Modify existing fakes: `tests/test_topo_backend.py`, `tests/test_fstopo_backend.py`, `tests/test_dem_3dep.py`; add `mirror: MirrorPath | None = None` to `fetch_etag` / `fetch_sized` keyword parameters and import MirrorPath from fetch. Preserve existing error wording containing `size` and `ETag`.
-
 **Interfaces:**
 - Consumes: `MirrorPath`, `_from_sources`, `etag_matches`, `record_fetch`, `fetch_disclosure`.
 - Produces: `fetch_etag(url: str, etag: str, *, expected_size: int, mirror: MirrorPath | None = None) -> FetchResult`, `fetch_sized(url: str, *, expected_size: int, mirror: MirrorPath | None = None) -> FetchResult`; `_from_sources(..., publisher_transport: Transport | None = None)` so size-only publisher requests retain no-redirect transport.
@@ -2406,15 +2209,12 @@ git commit -m "feat: resolve pinned Kiwix books and CoMaps maps offline"
 - [ ] Write failing tests:
 
 ```python
-import hashlib
 from pathlib import Path
-
+import hashlib
 import pytest
-
-from hammunition.backends.base import BackendError
 from hammunition.fetch import Fetcher, MirrorPath, mirror_url
+from hammunition.backends.base import BackendError
 from test_fetch_mirror import Routes
-
 
 @pytest.mark.parametrize("kind", ["etag", "sized"])
 def test_mirror_good_and_corrupt_offline(tmp_path: Path, kind: str) -> None:
@@ -2445,7 +2245,7 @@ def test_mirror_good_and_corrupt_offline(tmp_path: Path, kind: str) -> None:
 
 Add online bad mirror → good publisher, both fail (both reasons named), cap hit, wrong size, missing TIFF magic, ETag multipart, cache re-verification with `source="cache"`, and size-only cached file always fetched again. Test strict no-redirect publisher route when mirror misses a size-only sheet. Backend tests assert `Action.sources`, description and `action_end` facts for all three families, and that fetcher path identity equals Task 16 artifacts identity.
 
-- [ ] Run: `.venv/bin/pytest tests/test_fetch_bunker_etag_sized.py tests/test_fetch.py tests/test_topo_backend.py tests/test_fstopo_backend.py tests/test_dem_3dep.py -q`; expected FAIL: `fetch_etag()` / `fetch_sized()` unexpected `mirror` keyword.
+- [ ] Run: `.venv/bin/pytest tests/test_fetch_bunker_etag_sized.py -q`; expected FAIL: `fetch_etag()` / `fetch_sized()` unexpected `mirror` keyword.
 - [ ] Replace the two long methods with these full functions (class indentation), keeping path helpers unchanged:
 
 ```python
@@ -2459,7 +2259,7 @@ def fetch_etag(self, url: str, etag: str, *, expected_size: int,
     temporary = final.with_name(final.name + f".part.{os.getpid()}")
     def verify(_sha: str, size: int, _other: str | None, where: str) -> None:
         if size != expected_size:
-            raise VerificationError(f"{where}: expected {expected_size} bytes, got {size}; the size check failed")
+            raise VerificationError(f"{where}: expected {expected_size} bytes, got {size}")
         if not etag_matches(temporary, etag):
             raise VerificationError(f"{where}: no part size reproduces publisher ETag {etag}; discarded")
     done = self._from_sources(url, mirror, temporary, max_bytes=expected_size + 1024 * 1024,
@@ -2476,7 +2276,7 @@ def fetch_sized(self, url: str, *, expected_size: int,
     temporary = final.with_name(final.name + f".part.{os.getpid()}")
     def verify(_sha: str, size: int, _other: str | None, where: str) -> None:
         if size != expected_size:
-            raise VerificationError(f"{where}: expected {expected_size} bytes, got {size}; the size check failed")
+            raise VerificationError(f"{where}: expected {expected_size} bytes, got {size}")
         with temporary.open("rb") as handle:
             magic = handle.read(4)
         if magic not in TIFF_MAGIC:
@@ -2489,11 +2289,11 @@ def fetch_sized(self, url: str, *, expected_size: int,
 
 Inside `_from_sources`, use `self.mirror_transport` for mirror, otherwise `publisher_transport or self.transport`; retain existing temporary cleanup and offline refusal from Task 5. Backend call sites use topo `MirrorPath(manifest.name, quad.path)`, FSTopo `MirrorPath(manifest.name, sheet.name)`, 3DEP `MirrorPath(manifest.name, tile.name)` and their existing sha256 branch remains unchanged. Pass facts and source descriptions through the same `fetch_disclosure` / `record_fetch` helpers as regional data. No guessed sha256 for ETag/size-only downloads.
 
-- [ ] Run: `.venv/bin/pytest tests/test_fetch_bunker_etag_sized.py tests/test_fetch_mirror.py tests/test_fetch.py tests/test_topo_backend.py tests/test_fstopo_backend.py tests/test_dem_3dep.py -q`; expected PASS.
+- [ ] Run: `.venv/bin/pytest tests/test_fetch_bunker_etag_sized.py tests/test_fetch_mirror.py tests/test_topo_backend.py tests/test_fstopo_backend.py -q`; expected PASS.
 - [ ] Commit:
 
 ```bash
-git add src/hammunition/fetch.py src/hammunition/backends/topo.py src/hammunition/backends/fstopo.py src/hammunition/backends/dem.py tests/test_fetch_bunker_etag_sized.py tests/test_topo_backend.py tests/test_fstopo_backend.py tests/test_dem_3dep.py
+git add src/hammunition/fetch.py src/hammunition/backends/topo.py src/hammunition/backends/fstopo.py src/hammunition/backends/dem.py tests/test_fetch_bunker_etag_sized.py
 git commit -m "feat: mirror USGS and FSTopo downloads with existing checks"
 ```
 
@@ -2504,23 +2304,19 @@ git commit -m "feat: mirror USGS and FSTopo downloads with existing checks"
 - Modify: `src/hammunition/backends/source.py:392-441`, `src/hammunition/backends/binary.py:120-163`, `src/hammunition/backends/venv.py:182-238`, `src/hammunition/backends/node.py:195-222,305-312`.
 - Test: existing `tests/test_source_backend.py`, `tests/test_binary_backend.py`, `tests/test_venv_backend.py`, `tests/test_node_backend.py`.
 
-- Modify: `src/hammunition/cli/main.py` (context and isolated static backend dispatch).
-
 **Interfaces:**
 - Consumes: `RemoteArtifact`, `Fetcher`, `Action.facts/sources`, context.
-- Produces: `preflight_payloads(unit: str, pins: Sequence[tuple[RemoteArtifact, int | None]], *, context: ResolutionContext | None) -> None`; `payload_name(artifact: RemoteArtifact) -> str`, `payload_path(unit: str, artifact: RemoteArtifact) -> MirrorPath`, `payload_action(unit: str, artifact: RemoteArtifact, fetcher: Fetcher, *, label: str, max_bytes: int | None = None, expected_size: int | None = None, fetched: dict[str, Path] | None = None) -> Action`.
+- Produces: `payload_name(artifact: RemoteArtifact) -> str`, `payload_path(unit: str, artifact: RemoteArtifact) -> MirrorPath`, `payload_action(unit: str, artifact: RemoteArtifact, fetcher: Fetcher, *, label: str, max_bytes: int | None = None, expected_size: int | None = None, fetched: dict[str, Path] | None = None) -> Action`.
 - Names: `<sha256>/<safe_name(url)>` within the catalog unit. This avoids different per-target payloads with the same basename colliding. Task 16 and Plan B must use this exact exported helper, not their own basename rule. Existing data `install_as` names remain unchanged.
 
 - [ ] Write failing test:
 
 ```python
-import hashlib
 from pathlib import Path
-
-from hammunition.payloads import payload_action, payload_path
-
+import hashlib
 from hammunition.fetch import Fetcher, mirror_url
 from hammunition.manifest.schema import RemoteArtifact
+from hammunition.payloads import payload_path, payload_action
 from test_fetch_mirror import Routes
 
 
@@ -2546,28 +2342,18 @@ Parametrize backend-level tests over the four existing manifest helpers/builders
 
 ```python
 import importlib
-
-import pytest
 import yaml
-from bunker_fixtures import artifact as catalogue_artifact
-from bunker_fixtures import document, key, signed
-from hammunition.keystrength import classify
-from hammunition.signers import EnrolledKey, MirrorState, save_mirror
-
+import pytest
 from hammunition.backends.source import SourceBackend
 from hammunition.station import Station, save_station
+from hammunition.signers import EnrolledKey, MirrorState, save_mirror
+from hammunition.keystrength import classify
+from bunker_fixtures import artifact as catalogue_artifact, document, key, signed
 
 
 def test_ics_forms_offline_install_without_regions(tmp_path: Path,
                                                  monkeypatch: pytest.MonkeyPatch) -> None:
     cli = importlib.import_module("hammunition.cli.main")
-    from hammunition.distro import Target
-    for var in ("XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME"):
-        monkeypatch.setenv(var, str(tmp_path / var.lower()))
-    monkeypatch.delenv("SUDO_USER", raising=False)
-    monkeypatch.setenv("USER", "root")
-    target = Target(distro="debian", version="13", arch="x86_64")
-    monkeypatch.setattr(Target, "detect", classmethod(lambda cls: target))
     catalog = tmp_path / "catalog"
     (catalog / "packages").mkdir(parents=True)
     (catalog / "profiles").mkdir()
@@ -2576,8 +2362,8 @@ def test_ics_forms_offline_install_without_regions(tmp_path: Path,
     block = manifest["install"][0]["install"]
     export = tmp_path / "export"
     (export / "ics-forms").mkdir(parents=True)
-    rows: list[dict[str, object]] = []
-    expected: dict[str, bytes] = {}
+    rows = []
+    expected = {}
     for index, pin in enumerate(block["artifacts"]):
         body = f"%PDF-1.4 fixture {index}\n".encode()
         pin["sha256"] = hashlib.sha256(body).hexdigest()
@@ -2652,53 +2438,7 @@ def payload_action(unit: str, artifact: RemoteArtifact, fetcher: Fetcher, *, lab
                   detail=detail, sources=sources, facts=facts, perform=perform)
 ```
 
-Define the named preflight in payloads.py; call it before constructing any build steps, after the existing attribution/current check:
-
-```python
-def preflight_payloads(unit: str, pins: Sequence[tuple[RemoteArtifact, int | None]], *,
-                       context: ResolutionContext | None) -> None:
-    if context is None or not context.offline:
-        return
-    for pin, size in pins:
-        name = payload_name(pin)
-        context.require_payload(unit, name, sha256=pin.sha256, size=size)
-        context.note(unit, name, fallback=False)
-```
-
-Import Sequence from collections.abc and ResolutionContext under TYPE_CHECKING. Explicit call sites in SourceBackend, BinaryBackend, VenvBackend and NodeBackend (block types are already narrowed in each method):
-
-```python
-# source: before _build_steps / extraction Actions
-preflight_payloads(manifest.name, ((block.source, None),), context=self.context)
-# binary: before extraction/copy Actions
-preflight_payloads(manifest.name, ((block.artifact, None),), context=self.context)
-# venv: before venv/build/pip Actions, following the existing payload presence check
-if block.payload is not None:
-    preflight_payloads(manifest.name, ((block.payload, None),), context=self.context)
-# Node: before extraction/npm/build Actions
-preflight_payloads(manifest.name, ((block.artifact, None),), context=self.context)
-```
-
-```python
-@pytest.mark.parametrize("missing", [False, True])
-def test_payload_preflight_checks_every_pin_before_build(tmp_path: Path, missing: bool) -> None:
-    from bunker_fixtures import artifact, make_context
-    from hammunition.payloads import payload_name, preflight_payloads
-    from hammunition.resolution import CatalogueMiss
-    pins = [RemoteArtifact(url=f"https://example.invalid/{n}.tar", sha256=hashlib.sha256(bytes([n])).hexdigest()) for n in (1, 2)]
-    rows = [artifact("thing", payload_name(pin), bytes([n])) for n, pin in zip((1, 2), pins, strict=True)]
-    context = make_context(tmp_path, rows[:1] if missing else rows)
-    if missing:
-        with pytest.raises(CatalogueMiss, match="not on Bunker"):
-            preflight_payloads("thing", tuple((pin, 1) for pin in pins), context=context)
-    else:
-        preflight_payloads("thing", tuple((pin, 1) for pin in pins), context=context)
-        assert len(context.notes) == 2
-```
-
-Extend each owning backend test to call steps with an offline signed context missing its pin and assert CatalogueMiss before any build Action is returned or runner used. A current attributed build skips preflight; missing direct/profile payloads use plan.py’s catalogue_deferral policy.
-
-Replace each backend's existing fetch Action with `payload_action`, preserving its own downstream extraction/path map. Source passes block.source; binary passes block.artifact and `fetched`; venv passes block.payload; Node passes block.artifact. Before building steps offline, use `preflight_payloads` at the call sites above for every new payload. Skip for a build whose existing attribution already makes it current. Do not add digest-less payloads to `RemoteArtifact` or infer a repository pin from Bunker bytes. Pass the shared context as optional constructor input through CLI; keep TYPE_CHECKING imports where needed to avoid the existing fetch/backends cycle.
+Replace each backend's existing fetch Action with `payload_action`, preserving its own downstream extraction/path map. Source passes block.source; binary passes block.artifact and `fetched`; venv passes block.payload; Node passes block.artifact. Before building steps offline, call `context.require_payload` for every new payload, with repo sha256 and known size. Skip for a build whose existing attribution already makes it current. Do not add digest-less payloads to `RemoteArtifact` or infer a repository pin from Bunker bytes. Pass the shared context as optional constructor input through CLI; keep TYPE_CHECKING imports where needed to avoid the existing fetch/backends cycle.
 
 - [ ] Run: `.venv/bin/pytest tests/test_payload_mirror.py tests/test_source_backend.py tests/test_binary_backend.py tests/test_venv_backend.py tests/test_node_backend.py -q`; expected PASS.
 - [ ] Commit:
@@ -2716,22 +2456,20 @@ git commit -m "feat: mirror pinned source binary venv and Node payloads"
 - Test: `tests/test_mapsforge.py`, `tests/test_git_comaps.py`.
 
 **Interfaces:**
-- Consumes: Task 13 `payload_action`/`payload_path`/`preflight_payloads`, existing `ConverterTool`, `ExtraFile` and `GitInstall.extra_files`.
+- Consumes: Task 13 `payload_action`/`payload_path`, existing `ConverterTool`, `ExtraFile` and `GitInstall.extra_files`.
 - Produces: Mapsforge `_fetch_tool(..., unit: str)` routes exactly `payload_path(unit, tool.artifact)`; git extra-file fetch uses `payload_path(manifest.name, RemoteArtifact(...))`. Preserve explicit expected sizes and declared-but-unverified upstream signature warning.
 
 - [ ] Write failing test against the Mapsforge Action produced by the shared helper, then the existing backend's `_tool_steps`:
 
 ```python
-import hashlib
 from pathlib import Path
-
-import pytest
-from hammunition.payloads import payload_action, payload_path
-
-from hammunition.backends.base import BackendError
-from hammunition.fetch import Fetcher, mirror_url
+import hashlib
 from hammunition.manifest.schema import RemoteArtifact
+from hammunition.fetch import Fetcher, mirror_url
+from hammunition.payloads import payload_action, payload_path
+from hammunition.backends.base import BackendError
 from test_fetch_mirror import Routes
+import pytest
 
 
 def test_converter_tool_size_check_survives_mirror(tmp_path: Path) -> None:
@@ -2765,33 +2503,6 @@ def _fetch_extra(fetcher: Fetcher, extra: ExtraFile, unit: str) -> str:
     return step.perform()
 ```
 
-Use Task 13 preflight_payloads before _tool_steps / _extra_file_steps return their first Action:
-
-```python
-# Mapsforge: tool is narrowed after its existing optional-tool guard.
-preflight_payloads(manifest.name, ((tool.artifact, tool.size),), context=self.context)
-# git extras: preflight all remote extras together; from_tree produces no remote pin.
-preflight_payloads(manifest.name, tuple(
-    (RemoteArtifact(url=extra.artifact.url, sha256=extra.artifact.sha256), extra.artifact.size)
-    for extra in block.extra_files if extra.artifact is not None
-), context=self.context)
-```
-
-```python
-def test_tool_extra_preflight_refuses_before_build(tmp_path: Path) -> None:
-    from bunker_fixtures import make_context
-    from hammunition.payloads import preflight_payloads
-    from hammunition.resolution import CatalogueMiss
-    context = make_context(tmp_path, [])
-    pin = RemoteArtifact(url="https://example.invalid/writer.jar", sha256="a" * 64)
-    with pytest.raises(CatalogueMiss, match="not on Bunker"):
-        preflight_payloads("mapsforge-poi", ((pin, 7),), context=context)
-    with pytest.raises(CatalogueMiss, match="not on Bunker"):
-        preflight_payloads("thing", ((pin, 7),), context=context)
-```
-
-The owning backend call-site tests also assert _tool_steps and _extra_file_steps refuse with the missing signed context before returning Actions; the existing from_tree-only case returns its local-copy steps and invokes no payload validation.
-
 Prefer the Action directly in `_extra_file_steps` so its facts/sources survive, rather than hiding it in `_fetch_extra`. Offline availability validation covers all tool/extra files before the first build; only their repository digest governs execution. Converter licence remains tool.licence; git extra-file licence is not invented.
 
 - [ ] Run: `.venv/bin/pytest tests/test_tool_extra_mirror.py tests/test_mapsforge.py tests/test_git_comaps.py -q`; expected PASS.
@@ -2819,7 +2530,6 @@ git commit -m "feat: mirror converter tools and git extra-file downloads"
 ```python
 import subprocess
 from pathlib import Path
-
 import pytest
 from hammunition.gitbundles import bundle_name
 
@@ -2871,14 +2581,11 @@ Expected pre-fix FAIL: `ImportError` mentioning a partially initialized module (
 
 ```python
 # gitbundles.py: runtime imports are leaf modules; annotations only are guarded.
-import tempfile
 from typing import TYPE_CHECKING
-
 if TYPE_CHECKING:
-    from hammunition.resolution import ResolutionContext
-
     from hammunition.backends.base import CommandRunner
     from hammunition.fetch import Fetcher
+    from hammunition.offline import ResolutionContext
     from hammunition.manifest.schema import GitInstall
 
 GIT_ENV: dict[str, str] = {"GIT_TERMINAL_PROMPT": "0", "GIT_EDITOR": "true"}
@@ -2932,7 +2639,6 @@ Full new git-bundle functions (local import `Fetcher`/`RemoteArtifact` inside `f
 def fetch_bundle(unit: str, parent_commit: str, *, path: str | None,
                  subcommit: str | None, fetcher: Fetcher,
                  context: ResolutionContext) -> Path:
-    from hammunition.backends.base import BackendError
     from hammunition.fetch import Fetcher, MirrorPath
     from hammunition.manifest.schema import RemoteArtifact
     name = bundle_name(unit, parent_commit, path=path, subcommit=subcommit)
@@ -2953,7 +2659,6 @@ def fetch_bundle(unit: str, parent_commit: str, *, path: str | None,
 
 def clone_checked(bundle: Path, destination: Path, commit: str, *,
                   runner: CommandRunner) -> None:
-    from hammunition.backends.base import BackendError
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="bundle-verify-", dir=destination.parent) as directory:
         scratch = Path(directory)
@@ -2969,7 +2674,6 @@ def clone_checked(bundle: Path, destination: Path, commit: str, *,
 def checkout_gitlinks(root: Path, repo: Path, unit: str, parent_commit: str, *,
                       fetcher: Fetcher, context: ResolutionContext,
                       runner: CommandRunner) -> int:
-    from hammunition.backends.base import BackendError
     output = checked_git(runner, repo, "ls-tree", "-r", "-z", "HEAD")
     links: list[tuple[str, str]] = []
     for record in output.split("\x00"):
@@ -3020,7 +2724,6 @@ def checkout_gitlinks(root: Path, repo: Path, unit: str, parent_commit: str, *,
 def checkout_bundle(unit: str, block: GitInstall, destination: Path, *,
                     fetcher: Fetcher, context: ResolutionContext,
                     runner: CommandRunner) -> str:
-    from hammunition.backends.base import BackendError
     commit = block.commit or block.ref
     if COMMIT_SHA.fullmatch(commit) is None:
         raise BackendError(f"{unit}: tag {block.ref} has no recorded commit; offline bundle verification needs a repository pin")
@@ -3041,15 +2744,13 @@ Before replacing normal clone commands, preserve the existing prepare Action (cl
 Real moved-tag test added to `tests/test_git_bundles.py`:
 
 ```python
-from pathlib import Path
-
 import pytest
-from bunker_fixtures import artifact, make_context
-from hammunition.gitbundles import checkout_bundle
-
+from pathlib import Path
 from hammunition.backends.base import BackendError, SubprocessRunner
-from hammunition.fetch import Fetcher, MirrorPath, mirror_url
+from hammunition.fetch import Fetcher, mirror_url, MirrorPath
+from hammunition.gitbundles import checkout_bundle
 from hammunition.manifest.schema import GitInstall
+from bunker_fixtures import artifact, make_context
 from test_fetch_mirror import Routes
 
 
@@ -3090,14 +2791,13 @@ git commit -m "feat: verify mirrored git bundles and every pinned gitlink"
 ### Task 16: A10 — `artifacts --json` describes every payload, sheet, input and git pin
 
 **Files:**
-- Modify: `src/hammunition/terrain_plan.py` (stateless region_tiles/resolve_bare_earth), `src/hammunition/topo_plan.py` (stateless region_quads/region_sheets), `src/hammunition/manifest/schema.py:2453-2460` (additive licence metadata), `src/hammunition/artifacts.py:38-153,167-233,299-344,417-479`, `src/hammunition/interface/artifacts.py:39-151`, `src/hammunition/cli/main.py:1760-1848,8605-8640`.
+- Modify: `src/hammunition/manifest/schema.py:2453-2460` (additive licence metadata), `src/hammunition/artifacts.py:38-153,167-233,299-344,417-479`, `src/hammunition/interface/artifacts.py:39-151`, `src/hammunition/cli/main.py:1760-1848,8605-8640`.
 - Create: `tests/test_artifacts_bunker.py`.
-- Regenerate: `docs/reference/json-interface.md`, `docs/reference/schema.md`; modify `tests/fixtures/json/artifacts.json` and `docs/reference/bunker-catalogue.md`; hand-edit `docs/reference/cli.md` (no CLI generator).
+- Regenerate: `docs/reference/json-interface.md`; hand-edit `docs/reference/cli.md` (no CLI generator).
 - Read: `tests/test_artifacts.py:171-227,597-616,746-766`, `src/hammunition/manifest/schema.py:228-242,528-628,818-847,945-1016,1070-1090,1517-1554`.
 
 **Interfaces:**
 - Consumes: payload helpers, bundle_name, carried indices, existing list_artifacts probes and Task 7 selection codecs. No station reads.
-- Produces: `finish_selection(entries: list[RegionTiles], refused: list[str], *, selection_only: bool, installed: Path | None, tile_probe: TileProbe | None) -> DemResolution | None`; stateless selector extensions `region_tiles(..., installed: Path | None)`, `region_quads(..., installed: Path | None)`, `region_sheets(..., installed: Path | None)`, `resolve_bare_earth(..., installed: Path | None, tile_probe: TileProbe | None, selection_only: bool = False)` with existing return types and defaults for install callers.
 - Produces: `payload_entries(unit: str, block: SourceInstall | BinaryInstall | VenvInstall | NodeInstall | GitInstall | DerivedDataInstall, licence: str) -> tuple[ArtifactEntry, ...]`; existing `list_artifacts(..., bound: TopoBound = ALL, gateway: GatewayProbe | None = None) -> tuple[ArtifactEntry, ...]`.
 - Produces: `InputEntry(Strict)` with `kind: str`, `region: str`, `name: str`, `url: str | None`, `sha256: str | None`, `size: int | None`, `content: str | None`, `deferred: str | None`; `GitPinEntry(Strict)` with `unit: str` (always `git-bundles`), `name: str`, `repo: str`, `ref: str`, `commit: str | None`, `submodules: bool`, `licence: str`, `deferred: str | None`.
 - Produces: additive `ArtifactsDocument.inputs: tuple[InputEntry, ...] = ()`, `git_pins: tuple[GitPinEntry, ...] = ()`; `list_inputs(regions: Sequence[str], *, catalog_root: Path, probe: Probe, bound: TopoBound = ALL) -> tuple[InputEntry, ...]`; `list_git_pins(units: Sequence[str], catalog: Mapping[str, PackageManifest]) -> tuple[GitPinEntry, ...]`.
@@ -3107,12 +2807,10 @@ git commit -m "feat: verify mirrored git bundles and every pinned gitlink"
 
 ```python
 from pathlib import Path
-
-from hammunition.payloads import payload_name
-
 from hammunition.artifacts import list_git_pins, payload_entries
 from hammunition.manifest.load import load_catalog
 from hammunition.manifest.schema import SourceInstall
+from hammunition.payloads import payload_name
 
 
 def test_all_source_payloads_use_the_install_route() -> None:
@@ -3134,13 +2832,11 @@ Add backend-name parity tests for binary/venv/Node, converter-tool and git extra
 
 ```python
 import pytest
-
 from hammunition.artifacts import (
-    SelectionError,
-    etag_entry,
-    input_entry,
-    input_regions,
-    list_git_pins,
+    SelectionError, input_entry, input_regions, etag_entry, list_git_pins,
+)
+from hammunition.manifest.schema import (
+    PackageManifest, TopoQuadsInstall, DemTilesInstall,
 )
 
 
@@ -3193,6 +2889,7 @@ def test_cli_units_filter_inline_arrays(capsys: pytest.CaptureFixture[str]) -> N
     doc = json.loads(capsys.readouterr().out)
     assert doc["inputs"] == []
     assert doc["git_pins"] == []
+
 ```
 
 Expected pre-fix FAIL: missing `etag_entry`/`input_regions`, no `part_size`, or over-limit input accepted. Include these tests in both Task 16 pytest runs below. Add a `cmd_artifacts --units ics-forms --map-regions europe/monaco --json` assertion that both arrays are empty; for `--units osm-regions` every input's region is explicitly selected. No station regions may enter either array.
@@ -3246,7 +2943,7 @@ def input_regions(units: Sequence[str], regions: Sequence[str],
     return tuple(dict.fromkeys(regions)) if needs_regions else ()
 ```
 
-Import `RegionalDataInstall`, `DemTilesInstall` and `TopoQuadsInstall`; `DemTilesInstall.provider` distinguishes Copernicus/3DEP and `TopoQuadsInstall.provider` distinguishes US Topo/FSTopo. Route every selected US Topo quad through `etag_entry(unit, quad.path, quad.url, quad.etag, quad.size, block.licence)` and each 3DEP row through `etag_entry(unit, row.name, threedep_url(row.name), row.etag, row.size, block.licence)`; carried rows currently lack a part-size column, so emit null, never guess one from the multipart suffix. Update `ArtifactEntry.digest` documentation to allow the raw `<hex>-<parts>` ETag as well as hex digests. Inputs stay inline (`content` contains the exact UTF-8 text); the 8 MiB bound below counts encoded bytes, names the oversized input and refuses the command, rather than returning a deferred/null row.
+Import `RegionalDataInstall`, `DemTilesInstall` and `TopoQuadsInstall`; `DemTilesInstall.provider` distinguishes Copernicus/3DEP and `TopoQuadsInstall.provider` distinguishes US Topo/FSTopo. Route every selected US Topo quad through `etag_entry(unit, quad.path, quad.url, quad.etag, quad.size, block.licence)` and each 3DEP row through `etag_entry(unit, row.name, tile_url(row.name), row.etag, row.size, block.licence)`; carried rows currently lack a part-size column, so emit null, never guess one from the multipart suffix. Update `ArtifactEntry.digest` documentation to allow the raw `<hex>-<parts>` ETag as well as hex digests. Inputs stay inline (`content` contains the exact UTF-8 text); the 8 MiB bound below counts encoded bytes, names the oversized input and refuses the command, rather than returning a deferred/null row.
 
 In `cmd_artifacts`, construct arrays using the resolved `units` from `select_units`, not all catalogue keys; catch `SelectionError` from input generation through the existing unplannable error path:
 
@@ -3257,7 +2954,7 @@ git_pins = list_git_pins(units, catalog)
 # Pass inputs=inputs, git_pins=git_pins to ArtifactsDocument alongside existing fields.
 ```
 
-Here `region_probe` is the shared `MemoProbe(UrllibProbe())` and `bound` is the explicit CLI bound or `ALL`, defined before `list_artifacts`; use that same probe and bound for both calls. Include `src/hammunition/manifest/schema.py` in Files/commit, document the additive licence field, and regenerate JSON and schema references with their compare-only checks.
+Here `region_probe` is the shared `MemoProbe(UrllibProbe())` and `bound` is the explicit CLI bound or `ALL`, defined before `list_artifacts`; use that same probe and bound for both calls. Include `src/hammunition/manifest/schema.py` in Files/commit, document the additive licence field, and regenerate the JSON reference only.
 
 Extend `FETCHING` / `Block` to these classes and `TopoQuadsInstall` (derived only when it has a tool; git is fetching for bundles even without extras). `_blocks` filters variants explicitly, not truthiness of empty list. List every target variant, deduplicate identical `(unit,name,digest)` and refuse conflicting names using existing `_data` rule. Do not invent payload size/licence where manifests do not carry them; emit null size and “licence not recorded in this manifest” rather than claiming verification metadata exists. `artifacts` reports what is available; Bunker obtains actual size and sha256 when fetching. Its recorded size does not become a repo pin.
 
@@ -3319,78 +3016,16 @@ def list_git_pins(units: Sequence[str], catalog: Mapping[str, PackageManifest]) 
 
 The name with a tag is diagnostic only for a deferred entry and is never a fetchable bundle contract name. Do not present it as a payload the Bunker can serve.
 
-Extend the four shared selectors rather than copying their algorithms. T16 modifies terrain_plan.py and topo_plan.py with `installed: Path | None`; None bypasses local record reads. `resolve_bare_earth` additionally accepts `tile_probe: TileProbe | None` and `selection_only: bool = False`, with an early return after its existing selection loop (before any installed-file checks or publisher checks). Existing install callers keep their prior behavior. Exact insertion/replacements (finish_selection is a named helper in terrain_plan.py, called after the existing selection loop):
-
-```python
-# terrain_plan.region_tiles, replace its installed record read:
-recorded = read_record(installed / f"{slug}{TILES}", region, slug) if installed is not None else None
-# topo_plan.region_quads, replace its installed record read:
-recorded = read_record(installed / f"{slug}{QUADS}", region, slug) if installed is not None else None
-# topo_plan.region_sheets, replace its installed record read:
-recorded = read_sheets(installed / f"{slug}{QUADS}", region, slug) if installed is not None else None
-# resolve_bare_earth's region loop, replace its installed record read:
-recorded = read_record(installed / f"{slug}{TILES}", region, slug) if installed is not None else None
-# resolve_bare_earth: insert this inline after its selection loop (shown in a typed function context).
-def finish_selection(entries: list[RegionTiles], refused: list[str], *,
-                     selection_only: bool, installed: Path | None,
-                     tile_probe: TileProbe | None) -> DemResolution | None:
-    if selection_only:
-        if refused:
-            raise CopernicusError("\n".join(refused))
-        return DemResolution(regions=tuple(entries))
-    if installed is None or tile_probe is None:
-        raise CopernicusError("terrain downloads require an installed directory and tile probe")
-    return None
-```
-
-Call `finish_selection(entries, refused, selection_only=selection_only, installed=installed, tile_probe=tile_probe)` after the selection loop; return its non-None result, then explicitly narrow installed/tile_probe before existing checks. Keep boundary selection in region_quads/region_sheets: for `bound.mode == "none"` or an excluded region, return the empty corresponding RegionQuads/RegionSheets with bound.token before requesting outlines. Those same branches serve install and listing; list_inputs has no copy of the selection formula. Add a test comparing each returned content byte for byte with render_tiles(region_tiles(...)), render_tiles(resolve_bare_earth(..., selection_only=True).regions[0]), render_quads(region_quads(...)) and render_sheets(region_sheets(...)) under the same synthetic outline and bound; the fake tile probe raises if called. Pass installed=None and assert no read_record or installed filesystem reads in stateless mode. Test bound none/excluded regions explicitly.
-
-```python
-def test_list_inputs_reuses_install_selection_codecs(tmp_path: Path) -> None:
-    from hammunition.artifacts import list_inputs
-    from hammunition.backends.dem import render_record as render_tiles
-    from hammunition.backends.fstopo import render_record as render_sheets
-    from hammunition.backends.topo import render_record as render_quads
-    from hammunition.copernicus import load_tile_list
-    from hammunition.fstopo import load_index as load_fstopo_index
-    from hammunition.geofabrik import BASE
-    from hammunition.terrain_plan import THREEDEP_LIST, TILE_LIST, region_tiles, resolve_bare_earth
-    from hammunition.topo_bound import ALL
-    from hammunition.topo_plan import MemoProbe, region_quads, region_sheets
-    from hammunition.usgs3dep import load_tile_list as load_3dep_list
-    from hammunition.ustopo import load_index as load_ustopo_index
-    from test_terrain_plan import RegionProbe
-    root = Path(__file__).resolve().parents[1] / "catalog"
-    region, slug = "north-america/us/delaware", "north-america-us-delaware"
-    text = "test\n1\n -75.51 38.51\n -75.49 38.51\n -75.49 38.53\n -75.51 38.53\nEND\nEND\n"
-    probe = MemoProbe(RegionProbe({f"{BASE}/{region}.poly": text}))
-    rows = {row.kind: row for row in list_inputs((region,), catalog_root=root, probe=probe, bound=ALL)}
-    dem = region_tiles(region, slug, installed=None, tile_list=load_tile_list(root / TILE_LIST), probe=probe)
-    bare = resolve_bare_earth(((region, slug),), installed=None,
-        tiles=load_3dep_list(root / THREEDEP_LIST), region_probe=probe, tile_probe=None, selection_only=True)
-    topo = region_quads(region, slug, installed=None, index=load_ustopo_index(root / "data/ustopo-quads.txt"),
-                        probe=probe, notes=[], bound=ALL)
-    forest = region_sheets(region, slug, installed=None, index=load_fstopo_index(root / "data/fstopo-quads.txt"),
-                          probe=probe, notes=[], bound=ALL)
-    expected = {"region-outline": text, "tile-selection": render_tiles(dem),
-                "dem3dep-selection": render_tiles(bare.regions[0]),
-                "sheet-selection": render_quads(topo), "fstopo-selection": render_sheets(forest)}
-    assert {kind: row.content for kind, row in rows.items()} == expected
-    for kind, row in rows.items():
-        assert row.deferred is None and row.size == len(expected[kind].encode())
-        assert row.sha256 == hashlib.sha256(expected[kind].encode()).hexdigest()
-```
-
 Full input listing implementation, using existing codecs and explicit catalog root (import aliases exactly as named here from their real modules):
 
 ```python
-from hammunition.backends.dem import RegionTiles
-from hammunition.backends.dem import render_record as render_tiles
-from hammunition.backends.fstopo import render_record as render_sheets
-from hammunition.backends.topo import render_record as render_quads
-from hammunition.fstopo import load_index as load_fstopo_index
-from hammunition.usgs3dep import load_tile_list as load_3dep_list
+from hammunition.backends.dem import RegionTiles, render_record as render_tiles
+from hammunition.backends.topo import RegionQuads, render_record as render_quads
+from hammunition.backends.fstopo import RegionSheets, render_record as render_sheets
 from hammunition.ustopo import load_index as load_ustopo_index
+from hammunition.fstopo import load_index as load_fstopo_index
+from hammunition.usgs3dep import load_tile_list as load_3dep_list, tile_name as threedep_name
+
 
 MAX_INPUT_BYTES = 8 * 1024 * 1024
 
@@ -3404,60 +3039,52 @@ def input_entry(kind: str, region: str, name: str, text: str, url: str | None = 
 
 def list_inputs(regions: Sequence[str], *, catalog_root: Path, probe: Probe,
                 bound: TopoBound = ALL) -> tuple[InputEntry, ...]:
-    from hammunition.terrain_plan import (
-        THREEDEP_LIST,
-        TILE_LIST,
-        region_tiles,
-        resolve_bare_earth,
-    )
-    from hammunition.topo_plan import MemoProbe, region_quads, region_sheets
-    shared = probe if isinstance(probe, MemoProbe) else MemoProbe(probe)
     out: list[InputEntry] = []
-    extensions = {"region-outline": "poly", "tile-selection": "tiles",
-                  "sheet-selection": "quads", "dem3dep-selection": "tiles",
-                  "fstopo-selection": "quads"}
+    kinds = ("region-outline", "tile-selection", "sheet-selection", "dem3dep-selection", "fstopo-selection")
     for region in dict.fromkeys(regions):
         url = f"{BASE}/{region}.poly"
+        try:
+            text = probe.text(url)
+            outer, holes = parse_poly(text)
+        except (GeofabrikError, CopernicusError, OSError) as exc:
+            for kind in kinds:
+                extension = "poly" if kind == "region-outline" else "tiles" if "tile" in kind or kind == "dem3dep-selection" else "quads"
+                out.append(InputEntry(kind, region, f"{region}.{extension}", None, None, None, None, str(exc)))
+            continue
+        out.append(input_entry("region-outline", region, f"{region}.poly", text, url))
         slug = region.replace("/", "-")
-        def copernicus_record() -> str:
-            record = region_tiles(region, slug, installed=None,
-                                  tile_list=load_tile_list(catalog_root / TILE_LIST), probe=shared)
-            return render_tiles(record)
-        def threedep_record() -> str:
-            resolution = resolve_bare_earth(((region, slug),), installed=None,
-                tiles=load_3dep_list(catalog_root / THREEDEP_LIST), region_probe=shared,
-                tile_probe=None, bound=bound, selection_only=True)
-            record = resolution.regions[0] if resolution.regions else RegionTiles(region, slug, (), 0, bound.token)
-            return render_tiles(record)
-        def topo_record() -> str:
-            record = region_quads(region, slug, installed=None,
-                index=load_ustopo_index(catalog_root / "data/ustopo-quads.txt"),
-                probe=shared, notes=[], bound=bound)
-            return render_quads(record)
-        def fstopo_record() -> str:
-            record = region_sheets(region, slug, installed=None,
-                index=load_fstopo_index(catalog_root / "data/fstopo-quads.txt"),
-                probe=shared, notes=[], bound=bound)
-            return render_sheets(record)
-        producers: dict[str, Callable[[], str]] = {
-            "region-outline": lambda: shared.text(url), "tile-selection": copernicus_record,
-            "sheet-selection": topo_record, "dem3dep-selection": threedep_record,
-            "fstopo-selection": fstopo_record,
-        }
-        for kind, produce in producers.items():
-            name = f"{region}.{extensions[kind]}"
+        squares = squares_touching(outer, holes)
+        for kind in kinds[1:]:
             try:
-                text = produce()
-                if kind == "region-outline":
-                    parse_poly(text)  # malformed outlines defer, never empty records
-            except (GeofabrikError, CopernicusError, UstopoError, FstopoError, OSError) as exc:
-                out.append(InputEntry(kind, region, name, None, None, None, None, str(exc)))
-                continue
-            out.append(input_entry(kind, region, name, text, url if kind == "region-outline" else None))
+                if kind == "tile-selection":
+                    listed = load_tile_list(catalog_root / TILE_LIST)
+                    names, unpublished = select(squares, listed)
+                    body = render_tiles(RegionTiles(region, slug, names, unpublished))
+                    extension = "tiles"
+                elif kind == "dem3dep-selection":
+                    listed3 = load_3dep_list(catalog_root / "data/usgs-3dep-tiles.txt")
+                    names3 = {threedep_name(square) for square in squares}
+                    selected3 = tuple(sorted(name for name in names3 if name in listed3 and bound.keeps(tile_box(name)))) if bound.wants_region(region) and bound.mode != "none" else ()
+                    body = render_tiles(RegionTiles(region, slug, selected3, len(names3 - set(listed3)), bound.token))
+                    extension = "tiles"
+                elif kind == "sheet-selection":
+                    quads = load_ustopo_index(catalog_root / "data/ustopo-quads.txt").select(outer, holes)
+                    kept = bound.select(quads) if bound.wants_region(region) and bound.mode != "none" else ()
+                    body = render_quads(RegionQuads(region, slug, kept, bound.token))
+                    extension = "quads"
+                else:
+                    sheets = load_fstopo_index(catalog_root / "data/fstopo-quads.txt").select(outer, holes)
+                    kept_sheets = bound.select(sheets) if bound.wants_region(region) and bound.mode != "none" else ()
+                    body = render_sheets(RegionSheets(region, slug, kept_sheets, bound.token))
+                    extension = "quads"
+                out.append(input_entry(kind, region, f"{region}.{extension}", body))
+            except (CopernicusError, UstopoError, FstopoError, OSError) as exc:
+                extension = "tiles" if kind in ("tile-selection", "dem3dep-selection") else "quads"
+                out.append(InputEntry(kind, region, f"{region}.{extension}", None, None, None, None, str(exc)))
     return tuple(out)
 ```
 
-Import `tile_url as threedep_url` from `hammunition.usgs3dep`, `ALL`/`TopoBound` from topo_bound, and `UstopoError`/`FstopoError` from their respective modules. The same text codecs are exposed for the Bunker writer; no invented executable “selection” file. Make `MemoProbe` shared between `list_inputs` and artifact sheet/tile listing so the outline is fetched once. Do not use installed records to generate inputs.
+Import `tile_box` from `hammunition.terrain_plan`, `ALL`/`TopoBound` from topo_bound, and `UstopoError`/`FstopoError` from their respective modules. The same text codecs are exposed for the Bunker writer; no invented executable “selection” file. Make `MemoProbe` shared between `list_inputs` and artifact sheet/tile listing so the outline is fetched once. Do not use installed records to generate inputs.
 
 `list_git_pins` emits parent pin/ref/repo/submodules with name `bundle_name(manifest.name, block.commit or block.ref)`. For an unpinned tag produce `commit=None`, `deferred="tag has no recorded commit; offline bundle verification needs a repository pin"`. Recursive bundle names are not knowable from current manifests alone (they carry only `submodules: bool`): document that the Bunker enumerates pinned gitlinks through the Task 15 engine API, and its generated catalogue lists every recursive artifact. No network Git clone is hidden in `artifacts`. Add this limitation to the reference so Plan B has the exact division of responsibility.
 
@@ -3465,8 +3092,6 @@ Import `tile_url as threedep_url` from `hammunition.usgs3dep`, `ALL`/`TopoBound`
 
 ```bash
 .venv/bin/pytest tests/test_artifacts.py tests/test_artifacts_bunker.py -q
-python3 scripts/gen_schema_reference.py
-python3 scripts/gen_schema_reference.py --check
 python3 scripts/gen_json_reference.py
 python3 scripts/gen_json_reference.py --check
 python3 scripts/check_doc_links.py
@@ -3476,7 +3101,7 @@ Expected PASS; inspect regenerated artifacts goldens, especially old stable name
 - [ ] Commit:
 
 ```bash
-git add src/hammunition/terrain_plan.py src/hammunition/topo_plan.py src/hammunition/manifest/schema.py src/hammunition/artifacts.py src/hammunition/interface/artifacts.py src/hammunition/cli/main.py tests/test_artifacts_bunker.py tests/fixtures/json/artifacts.json docs/reference/schema.md docs/reference/json-interface.md docs/reference/cli.md docs/reference/bunker-catalogue.md
+git add src/hammunition/manifest/schema.py src/hammunition/artifacts.py src/hammunition/interface/artifacts.py src/hammunition/cli/main.py tests/test_artifacts_bunker.py tests/fixtures/json/artifacts.json docs/reference/json-interface.md docs/reference/cli.md docs/reference/bunker-catalogue.md
 git commit -m "feat: describe Bunker payloads inputs sheets and git pins"
 ```
 
@@ -3485,7 +3110,7 @@ git commit -m "feat: describe Bunker payloads inputs sheets and git pins"
 **Files:**
 - Create: `catalog/profiles/security-keys.yaml`, `catalog/packages/pcscd.yaml`, `catalog/packages/opensc.yaml`, `catalog/packages/fido2-tools.yaml`, `catalog/packages/yubikey-manager.yaml`, `catalog/packages/libpam-u2f.yaml`, `tests/test_security_keys_catalog.py`.
 - Regenerate: `docs/packages/pcscd.md`, `opensc.md`, `fido2-tools.md`, `yubikey-manager.md`, `libpam-u2f.md`, package index, `docs/profiles/security-keys.md`, profile index, affected generated wiki/project/category pages.
-- Modify: `mkdocs.yml` (profile nav), `README.md` (332 manifests; all 13 of the 1.0 set). Regenerate `docs/reference/capability-matrix.md`, `docs/reference/parity-coverage.md` and README parity headline with their existing generators; capability generation needs the maintainer’s package-list sweep, never invented rows.
+- Modify: `mkdocs.yml` (profile nav).
 - Read: `catalog/packages/pcsc-tools.yaml:1-37`, `catalog/packages/inspectrum.yaml:1-45`, `catalog/profiles/station.yaml:1-121`, `catalog/profiles/rf-security.yaml:1-97`, `src/hammunition/manifest/schema.py:2437-2453,3130-3229`, `scripts/gen_package_reference.py:1-75`, `scripts/gen_profile_reference.py:55-115`.
 
 **Interfaces:**
@@ -3496,8 +3121,7 @@ git commit -m "feat: describe Bunker payloads inputs sheets and git pins"
 
 ```python
 from pathlib import Path
-
-from hammunition.cli.main import load_all
+from hammunition.manifest.load import load_all
 from hammunition.manifest.schema import AptInstall
 
 
@@ -3533,8 +3157,7 @@ documentation:
   what_it_installs: >-
     PC/SC and OpenSC for PIV smartcards, FIDO2 tools and their device-access
     rules, YubiKey management tools and the U2F PAM module. All are from your
-    distribution's archive. Hammunition writes no PAM configuration; archive PAM
-    and debconf side effects are unmeasured across the target matrix.
+    distribution's archive. Installing the module does not enable token login.
   why_together: >-
     These provide the tools for signing a Bunker catalogue with a hardware key
     and checking that the station can reach its token. FIDO2 is not tied to one
@@ -3559,7 +3182,7 @@ documentation:
     - Sign and verify my Bunker's catalogue with a hardware key
   first_ten_minutes:
     - "Read the plan: `hammunition install security-keys --dry-run`."
-    - "Install with `hammunition install security-keys`; Hammunition writes no PAM files."
+    - "Install with `hammunition install security-keys`; PAM stays unconfigured."
     - "Connect your token and run `hammunition doctor` as yourself, without sudo."
     - "Read [the Bunker catalogue reference](../reference/bunker-catalogue.md)."
     - "Enrol with `hammunition mirror enrol URL`; type the fingerprint after checking it."
@@ -3570,9 +3193,7 @@ Create the manifests from the following **complete data**; write the YAML explic
 ```python
 # Run at implementation time from repository root, not in this planning turn.
 from pathlib import Path
-
 import yaml
-
 rows = {
     "pcscd": ("2.3.3", ["pcscd", "libpcsclite1"],
         "PC/SC smartcard daemon for PIV readers",
@@ -3605,7 +3226,7 @@ rows = {
     "libpam-u2f": ("1.4.0", ["libpam-u2f"],
         "U2F PAM module installed without enabling token login",
         "Provides the PAM module used by separately configured token-based login or sudo authentication.",
-        "It makes the module available for a later reviewed setup; installing this unit alone has not been measured for archive PAM/debconf side effects on every target. Hammunition itself writes no PAM configuration.",
+        "It makes the module available for a later reviewed setup; installing this unit alone changes no PAM configuration.",
         "PAM enabling is outside this profile and plan. Keep a working fallback login before any future authentication change.",
         "An incorrect PAM setup can prevent login. Hammunition does not write PAM files or register tokens in this phase.",
         "https://github.com/Yubico/pam-u2f", "https://github.com/Yubico/pam-u2f/issues"),
@@ -3626,13 +3247,6 @@ Versions here reflect the spec's Debian 13 measurement, not a required version o
 - [ ] Run:
 
 ```bash
-python3 scripts/gen_parity_coverage.py
-python3 scripts/gen_capability_matrix.py --package-list > reference/install-tests/catalog-apt.txt
-# Refresh policy-cat-<target>.tsv on all declared targets with scripts/apt-policy-sweep.sh
-# using the generated catalog-apt.txt and the maintainer’s target images.
-python3 scripts/gen_capability_matrix.py
-python3 scripts/gen_capability_matrix.py --check
-python3 scripts/gen_parity_coverage.py --check
 python3 scripts/gen_package_reference.py
 python3 scripts/gen_profile_reference.py
 python3 scripts/gen_projects_page.py
@@ -3646,11 +3260,11 @@ python3 scripts/gen_activity_hubs.py --check
 .venv/bin/pytest tests/test_security_keys_catalog.py tests/test_profile_docs.py tests/test_categories.py tests/test_docs_generated.py tests/test_site.py -q
 ```
 
-Expected PASS only after obtaining the maintainer sweep at reference/probes policy-cat-<target>.tsv paths (use the generator’s documented sweep format). Missing sweep is a named implementation prerequisite, never a silent skip; check test-enforced README counts and parity headline against generated output. Inspect generated pages. Target container package probes must report actual candidate/install outcomes; do not mark unmeasured targets verified.
+Expected PASS; inspect generated pages. Target container package probes must report actual candidate/install outcomes; do not mark unmeasured targets verified.
 - [ ] Commit all five named manifests, profile and their generated docs:
 
 ```bash
-git add README.md docs/reference/capability-matrix.md docs/reference/parity-coverage.md catalog/profiles/security-keys.yaml catalog/packages/pcscd.yaml catalog/packages/opensc.yaml catalog/packages/fido2-tools.yaml catalog/packages/yubikey-manager.yaml catalog/packages/libpam-u2f.yaml docs/packages docs/profiles docs/projects.md docs/applications.md docs/activities mkdocs.yml tests/test_security_keys_catalog.py
+git add catalog/profiles/security-keys.yaml catalog/packages/pcscd.yaml catalog/packages/opensc.yaml catalog/packages/fido2-tools.yaml catalog/packages/yubikey-manager.yaml catalog/packages/libpam-u2f.yaml docs/packages docs/profiles docs/projects.md docs/applications.md docs/activities mkdocs.yml tests/test_security_keys_catalog.py
 git commit -m "feat: add apt-only security-key tools without enabling PAM"
 ```
 
@@ -3658,7 +3272,7 @@ git commit -m "feat: add apt-only security-key tools without enabling PAM"
 
 **Files:**
 - Create: `src/hammunition/security_keys.py`, `tests/test_security_keys_doctor.py`.
-- Modify: `src/hammunition/doctor.py:51-61,245-295,680-740`, `src/hammunition/cli/main.py:7764-7965`, `src/hammunition/interface/doctor.py:1-93` (existing checks already serialize without new kind). Also modify `tests/test_json_install.py` (`_machine` installs an explicit nonzero CommandResult fake for `_security_key_probe`, covering test_runlog’s doctor call), `tests/conftest.py:177-210` (guard the new IO probe) and `tests/test_json_doctor.py:1-200` (inject the callback in existing CLI tests), `tests/fixtures/json/doctor-ready.json`, `tests/fixtures/json/doctor-warn.json`.
+- Modify: `src/hammunition/doctor.py:51-61,245-295,680-740`, `src/hammunition/cli/main.py:7764-7965`, `src/hammunition/interface/doctor.py:1-93` (existing checks already serialize without new kind). Also modify `tests/conftest.py:177-210` (guard the new IO probe) and `tests/test_json_doctor.py:1-200` (inject the callback in existing CLI tests).
 - Test: `tests/test_doctor.py`, `tests/test_json_doctor.py`.
 
 **Interfaces:**
@@ -3670,12 +3284,10 @@ git commit -m "feat: add apt-only security-key tools without enabling PAM"
 
 ```python
 from pathlib import Path
-
-from bunker_fixtures import key
-from hammunition.keystrength import classify
-from hammunition.security_keys import SecurityKeyState
-
 from hammunition.doctor import security_key_checks
+from hammunition.security_keys import SecurityKeyState
+from hammunition.keystrength import classify
+from bunker_fixtures import key
 
 
 def test_tokens_absent_are_informational_and_weak_key_warns(tmp_path: Path) -> None:
@@ -3784,82 +3396,16 @@ CLI subprocess adapter:
 
 ```python
 def _security_key_probe(argv: tuple[str, ...]) -> CommandResult:
-    import os
-    import selectors
     import subprocess
-    import time
-    cap = 64 * 1024
-    data: dict[str, bytearray] = {"stdout": bytearray(), "stderr": bytearray()}
     try:
-        process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except OSError as exc:
-        return CommandResult(argv=argv, returncode=127, stdout="", stderr=str(exc))
-    assert process.stdout is not None and process.stderr is not None
-    failure: str | None = None
-    deadline = time.monotonic() + 5
-    try:
-        with selectors.DefaultSelector() as selector:
-            for label, stream in (("stdout", process.stdout), ("stderr", process.stderr)):
-                os.set_blocking(stream.fileno(), False)
-                selector.register(stream, selectors.EVENT_READ, label)
-            while selector.get_map():
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    failure = "security-key probe timed out after 5 seconds"
-                    break
-                for event, _ in selector.select(remaining):
-                    used = sum(len(value) for value in data.values())
-                    chunk = os.read(event.fd, min(4096, cap - used + 1))
-                    if not chunk:
-                        selector.unregister(event.fd)
-                        continue
-                    if len(chunk) > cap - used:
-                        failure = "security-key probe exceeded 64 KiB output"
-                        break
-                    data[str(event.data)].extend(chunk)
-                if failure is not None:
-                    break
-            if failure is None:
-                process.wait(timeout=max(0.001, deadline - time.monotonic()))
+        result = subprocess.run(argv, capture_output=True, text=True, check=False, timeout=5)
     except (OSError, subprocess.TimeoutExpired) as exc:
-        failure = str(exc)
-    finally:
-        if process.poll() is None:
-            process.kill()
-        process.wait()
-        process.stdout.close()
-        process.stderr.close()
-    return CommandResult(argv=argv, returncode=127 if failure is not None else process.returncode,
-                         stdout=data["stdout"].decode("utf-8", errors="replace"),
-                         stderr=failure or data["stderr"].decode("utf-8", errors="replace"))
+        return CommandResult(argv=argv, returncode=127, stdout="", stderr=str(exc))
+    return CommandResult(argv=argv, returncode=result.returncode,
+                         stdout=result.stdout[:65536], stderr=result.stderr[:65536])
 ```
 
-```python
-def test_probe_flood_stops_at_output_cap(tmp_path: Path) -> None:
-    import sys
-    child = tmp_path / "flood.py"
-    child.write_text("import os\nwhile True:\n os.write(1, b'x' * 4096)\n os.write(2, b'y' * 4096)\n")
-    result = BOUNDED_PROBE((sys.executable, str(child)))
-    assert result.returncode != 0 and "64 KiB" in result.stderr
-    assert len(result.stdout.encode()) + len(result.stderr.encode()) <= 65536 + 128
-```
-
-Place the adapter flood test in `tests/test_security_keys_doctor.py` and call its module-level BOUNDED_PROBE alias saved before the autouse guard, allowing subprocess execution only for that temporary child. All doctor CLI tests inject ordinary CommandResult fakes. In `tests/test_json_install.py:_machine` add the concrete callback below so test_runlog's doctor call does not trip the new guard:
-
-```python
-monkeypatch.setattr(cli, "_security_key_probe", lambda argv: CommandResult(
-    argv=argv, returncode=127, stdout="", stderr="diagnostic tool unavailable in fixture"))
-```
-
-Import CommandResult from its existing backend module in that test helper; use the same explicit fake in existing JSON doctor fixtures. For the flood test, capture the bounded adapter in a module-level test alias before fixtures run and call that alias (rather than the guarded cli attribute):
-
-```python
-import importlib
-
-BOUNDED_PROBE = importlib.import_module("hammunition.cli.main")._security_key_probe
-```
-
-This adapter retains at most 64 KiB across both streams and reads at most one excess byte to detect overflow, kills and reaps on flood/timeout, and closes both pipes. Add a synthetic flood test (temporary Python child writing repeatedly to stdout and stderr), assert nonzero result, the cap remedy, and total retained output bounded; add timeout and missing-tool cases. These adapter tests explicitly opt into their temporary child only; token/machine probes remain guarded. The callback is replaced in unit tests, including `systemctl`, so conftest's real-machine protections remain intact. The new subprocess adapter must not bypass those guards in existing doctor CLI tests. Add a session autouse fixture that patches `cli.main._security_key_probe` to raise `MachineQueried` unless the particular test replaces it, and update each existing doctor CLI fixture to provide explicit fake results. Keep `_no_machine_queries` unchanged. New probe tests call probe_security_keys with a fake `run`; they never use the CLI's real adapter.
+Use a bounded-output Popen adapter if any command can exceed 64 KiB; truncating after capture does not bound allocation. All these diagnostic commands have short outputs, but test a flooded fake command and stop it after the cap rather than asserting the post-capture slice is a memory bound. The callback is replaced in unit tests, including `systemctl`, so conftest's real-machine protections remain intact. The new subprocess adapter must not bypass those guards in existing doctor CLI tests. Add a session autouse fixture that patches `cli.main._security_key_probe` to raise `MachineQueried` unless the particular test replaces it, and update each existing doctor CLI fixture to provide explicit fake results. Keep `_no_machine_queries` unchanged. New probe tests call probe_security_keys with a fake `run`; they never use the CLI's real adapter.
 
 ```python
 @pytest.fixture(autouse=True)
@@ -3876,11 +3422,11 @@ Use function scope (as shown), because pytest's monkeypatch fixture is function-
 
 Keep IO out of doctor.py. Probe argv: `systemctl is-active pcscd`; `fido2-token -L`; `ssh -V` (parse stdout+stderr with `OpenSSH_(\d+)\.(\d+)`); `opensc-tool --list-readers`, then `opensc-tool --reader N --name` for each numbered reader (only a PIV driver/name counts). For FIDO2 access, `fido2-token -I <listed device>` under the ordinary user; for PIV access, the successful card-name probe under that user. Do not claim `os.access` run as root proves udev access. A failed command or missing program returns None and a helpful check, not a crash. Add a 5-second subprocess timeout and output bound in the IO adapter; commands run as the user invoking doctor. If euid 0, suppress access probes and mark unmeasured; no root token operations. The CLI reads enrolled keys from owner-aware store and passes classify results; catch corrupt state as a warn check naming `mirror status`/enrol remedy. Doctor never refreshes trust or serial and never signs a test message.
 
-- [ ] Run: `.venv/bin/pytest tests/test_security_keys_doctor.py tests/test_doctor.py tests/test_json_doctor.py tests/test_runlog.py -q`; expected PASS; JSON golden and docs generator check also pass. Bench-only claims (token passthrough and Ubuntu ykman firmware support) stay explicitly unmeasured.
+- [ ] Run: `.venv/bin/pytest tests/test_security_keys_doctor.py tests/test_doctor.py -q`; expected PASS; JSON golden and docs generator check also pass. Bench-only claims (token passthrough and Ubuntu ykman firmware support) stay explicitly unmeasured.
 - [ ] Commit:
 
 ```bash
-git add src/hammunition/security_keys.py src/hammunition/doctor.py src/hammunition/cli/main.py src/hammunition/interface/doctor.py tests/conftest.py tests/test_json_install.py tests/test_json_doctor.py tests/test_security_keys_doctor.py tests/fixtures/json/doctor-ready.json tests/fixtures/json/doctor-warn.json
+git add src/hammunition/security_keys.py src/hammunition/doctor.py src/hammunition/cli/main.py src/hammunition/interface/doctor.py tests/conftest.py tests/test_json_doctor.py tests/test_security_keys_doctor.py tests/fixtures/json/doctor-ready.json tests/fixtures/json/doctor-warn.json
 git commit -m "feat: report hardware signing readiness and enrolled key strength"
 ```
 
@@ -3889,8 +3435,7 @@ git commit -m "feat: report hardware signing readiness and enrolled key strength
 **Files:**
 - Modify: `docs/DECISIONS.md:10711-end` (D-084 was last when read), `CLAUDE.md:235-250` (decisions row), `docs/guides/lan-mirror.md:1-173`, `docs/troubleshooting/install-failures.md`, `docs/troubleshooting/index.md`, `mkdocs.yml`, `docs/reference/bunker-catalogue.md` (all implemented codecs/routes).
 - Create: `changelog.d/381-offline-bunker.added.md`, `tests/test_docs_bunker.py`.
-- Modify: `tests/test_docs_mirror.py` (old limitation assertion).
-- Hand-edit: `docs/reference/cli.md`. Regenerate: JSON, station settings, package/profile pages through their generators. Do not modify the binding contract or CHANGELOG.md.
+- Regenerate: CLI, JSON, station settings, package/profile pages through their generators. Do not modify the binding contract or CHANGELOG.md.
 
 **Interfaces:**
 - Consumes: Tasks 1–18 public commands, warning text, trust matrix and implemented gaps.
@@ -3900,22 +3445,21 @@ git commit -m "feat: report hardware signing readiness and enrolled key strength
 
 ```python
 from pathlib import Path
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_d085_and_offline_remedies_are_documented() -> None:
-    decisions = " ".join((ROOT / "docs/DECISIONS.md").read_text().split()).casefold()
-    guide = " ".join((ROOT / "docs/guides/lan-mirror.md").read_text().split()).casefold()
-    problems = " ".join((ROOT / "docs/troubleshooting/install-failures.md").read_text().split()).casefold()
-    assert "## d-085" in decisions
+    decisions = (ROOT / "docs/DECISIONS.md").read_text()
+    guide = (ROOT / "docs/guides/lan-mirror.md").read_text()
+    problems = (ROOT / "docs/troubleshooting/install-failures.md").read_text()
+    assert "## D-085" in decisions
     assert "hardware keys are recommended, never required" in decisions
     for command in ("hammunition mirror enrol", "hammunition mirror status",
                     "hammunition mirror accept-older", "--offline", "--clear-mirror"):
         assert command in guide
     assert "apt and pip" in guide and "phase 2" in guide
     assert "not on Bunker" in problems and "30 days" in problems
-    assert "pam" in guide
+    assert "PAM" in guide
     fragment = ROOT / "changelog.d/381-offline-bunker.added.md"
     assert "#381" in fragment.read_text() and "D-085" in fragment.read_text()
 ```
@@ -3943,7 +3487,7 @@ digest-less data retains its existing disclosure and consent. RSA of 2048 bits o
 fewer is accepted with the shared weak-key warning. Hardware-only verification is an
 operator policy, off by default. Non-sk hardware origin requires operator affirmation.
 
-Hammunition writes no PAM configuration when installing `security-keys`; archive package side effects are unmeasured across the target matrix. Enabling token login or sudo requires
+Installing `security-keys` does not enable PAM. Enabling token login or sudo requires
 a separate reviewed step with typed consent, dry-run and a working fallback login
 check before anything is written; that step is outside phase 1.
 ```
@@ -3974,7 +3518,7 @@ accept-older` as the explicit backup-restoration remedy. A catalogue older than
 Phase 1 covers data and pinned payloads. Apt and pip offline support belongs to
 phase 2; git builds may still need archive dependencies, and Node applications may
 need npm packages. Offline planning reports those gaps before execution. Installing
-Hammunition writes no PAM configuration for the `security-keys` profile; archive package side effects are unmeasured across the target matrix.
+the `security-keys` profile never enables PAM.
 ```
 
 Update the rest of the guide: source/binary/venv/Node/tools/extras now mirror; topo/3DEP/FSTopo checks and bundle gitlink rules; offline mirror failure refuses instead of trying publishers; `file://` trusted keys and export layout; every warning; hardware-origin affirmation; all group requests carry id and filtering is **not access control** over cleartext HTTP. Keep “LAN-only documented, not enforced” and ACMA/RepeaterBook policy accurately stated. Avoid quoting private status output. Reference/user examples use Monaco or Delaware.
@@ -4060,7 +3604,10 @@ The binding contract wins over the spec's permanent `mirror-signers` path and ne
 flat fields. No CLI-reference generator exists; `cli.md` is edited by hand (lead's correction: a new generator is out of scope). The sibling Bunker v2 Entry types were inspected to preserve nullable failed entries. Current manifests do
 not carry recursive submodule pins or complete payload size/licence metadata; Task 16
 reports those limits rather than inventing values, and Task 15 derives gitlinks from
-the repository-pinned parent. Task 7 exposes existing engine selection record codecs for Plan B. The contract’s `no_touch_required` field is carried and shown at enrolment and status, never written as an allowed-signers option.
+the repository-pinned parent. The contract does not specify selection payload codecs
+or a no-touch metadata field: Task 7 exposes existing engine record codecs for Plan B,
+and Task 3 obtains no-touch permission locally after verifying a signature with that
+option. These are explicit handoff details, not edits to the binding JSON contract.
 
 Not grounded by bench measurements: real hardware signing, PIV/FIDO2 passthrough in a
 Bunker container, Immurok algorithms, Ubuntu ykman 5.2.1 with firmware 5.7, and catalogue
@@ -4070,47 +3617,4 @@ this plan-writing task does not perform a live archive sweep. Network isolation
 integration remains Plan B's acceptance gate. The implementation must retain strict
 types, existing station isolation, and document any newly discovered gap by name.
 
-Plan amendment verification: every Python block was compiled for syntax without execution. This does not establish that planned tests pass before implementation. Only this plan was edited; no repository tests, installs or commits were run.
-
-## Preflight resolution
-
-- C1: Task 2, lines 533–560 — HTTP state before file support.
-- C2: Task 2, lines 840–872; Task 2, lines 582–596 — locked updater and concurrent test owned by T2.
-- C3: Task 4, lines 1387–1405 — isolated XDG and saved enrolment before loader.
-- C4: Task 4, lines 1467–1467; Task 4, lines 1495–1497 — update and run station file-URL tests.
-- C5: Task 5, lines 1568–1584 — signed offline choose test; no-catalogue refusal test.
-- C6: Task 5, lines 1512–1535; Task 5, lines 1841–1843 — fixture definition and staging in T5.
-- C7: Task 5, lines 1689–1721; Task 5, lines 1755–1773 — unverified method and RegisterInstall test in T5.
-- C8: Task 7, lines 1968–2030 — distinct tile and quad codec aliases.
-- C9: Task 12, lines 2393–2499 — size/ETag error wording preserved; existing fetch tests run.
-- C10: Task 12, lines 2393–2499 — existing Fetcher fakes accept mirror; files listed, run and staged.
-- C11: Task 16, lines 3468–3480 — schema regenerated, checked and staged.
-- C12: Task 17, lines 3500–3518 — correct load_all import.
-- C13: Task 17, lines 3483–3656 — README counts and generated parity/capability matrix refreshed from maintainer sweep.
-- C14: Task 18, lines 3657–3886 — common _machine doctor fake covers runlog; files listed and tests run.
-- C15: Task 19, lines 3907–3921 — whitespace-collapsed, case-insensitive assertions.
-- C16: Task 5, lines 1587–1644; Task 7, lines 2068–2076 — leaf imports, plan.py preflight, import-order tests, explicit base/probe.
-- C17: Task 1, lines 285–347; Task 3, lines 895–1359 — wire metadata displayed at enrolment/status; no rejected option or retry.
-- C18: Task 1, lines 53–54; Task 1, lines 481–483 — openssh-client and git in target containers.
-- C19: Task 13, lines 2561–2612; Task 4, lines 1387–1405 — per-test XDG and detected target stub; isolated install prefix.
-- C20: Task 3, lines 1356–1358 — new CLI tests included in staging.
-- C21: Task 15, lines 2873–2885; Task 15, lines 2932–3039 — tempfile and function-local BackendError imports.
-- D1: Task 5, lines 1547–1582 — actual signed-catalogue resolution after three exhausted probes.
-- D2: Task 9, lines 2175–2221 — catalogue effect, real 3DEP success/missing/size refusal tests.
-- D3: Task 3, lines 961–977; Task 3, lines 1020–1077; Task 3, lines 1245–1319 — real typed second prompt; ConsentRecord logged through existing route.
-- D4: Task 1, lines 435–470 — independent artifact/input field indices.
-- D5: Task 2, lines 485–894; Task 3, lines 895–1359; Task 5, lines 1499–1844 — final store/transport/context fixture defined once in first consuming task.
-- D6: Task 16, lines 3322–3462 — shared selectors and existing codecs, stateless mode and byte-parity test.
-- D7: Task 13, lines 2655–2701; Task 14, lines 2768–2795 — named preflight, tests and payload/tool/extra call sites.
-- D8: Task 13, lines 2561–2612; Task 4, lines 1387–1405 — isolated config/state/cache, target and prefix.
-- D9: Task 4, lines 1360–1498; Task 13, lines 2500–2710 — retain loopback-only transport tests and temporary operator state/prefix; no external test network.
-- D10: Task 1, lines 49–484; Task 6, lines 1845–1939; Task 8, lines 2088–2151; Task 9, lines 2152–2258; Task 11, lines 2328–2392; Task 16, lines 3090–3482 — unused imports removed and Python-block import order corrected.
-- D11: Task 5, lines 1547–1582; Task 2, lines 533–560; Task 11, lines 2350–2362; Task 3, lines 927–956 — nested functions typed; optional store reads narrowed.
-- D12: Task 15, lines 2932–3039 — BackendError local imports and tempfile supplied.
-- D13: Task 1, lines 75–120 — overwrite guard avoids ssh-keygen prompt.
-- D14: Task 18, lines 3786–3862 — bounded Popen reader, flood test, kill/reap and timeout.
-- D15: Task 2, lines 767–883; Task 3, lines 1095–1165 — IO exceptions caught before yield; caller body errors propagate unchanged.
-- D16: Task 5, lines 1662–1721 — note mutation protected by per-context Lock.
-- D17: Task 17, lines 3483–3656 — archive PAM/debconf side effects explicitly unmeasured throughout profile/manifests.
-- D18: Task 3, lines 1339–1341; Task 5, lines 1837–1842; Task 19, lines 3887–4014 — cli.md hand-written; offline flags documented in T5 only.
-- D19: Task 3, lines 1013–1077; Task 3, lines 1182–1250 — no_touch_required carried and shown in enrolment and status text/JSON.
+Plan-writing verification: all Python code blocks were syntax-compiled without executing them; task headings, placeholder scan and referenced existing filenames were checked. This does not establish that the proposed tests pass before implementation. Git status showed only this new plan file; no commit, install or other file change was made.
