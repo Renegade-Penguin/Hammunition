@@ -217,8 +217,11 @@ def validate_state(state: MirrorState) -> MirrorState:
 
 def store_uid(owner: str | None) -> tuple[int, int]:
     if owner is not None and os.geteuid() == 0:
-        entry = pwd.getpwnam(owner)
-        return entry.pw_uid, entry.pw_gid
+        with suppress(KeyError):
+            entry = pwd.getpwnam(owner)
+            return entry.pw_uid, entry.pw_gid
+        # owner does not resolve (e.g. a stale $SUDO_USER); not elevated for
+        # anyone in particular, matching paths.open_operator_dir's own fallback.
     return os.geteuid(), os.getegid()
 
 
@@ -260,9 +263,11 @@ def store_lock(path: Path, owner: str | None) -> Iterator[int]:
         info = os.fstat(lock)
         if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600:
             raise SignerError("mirror.lock must be a regular 0600 file")
-        if created and os.geteuid() == 0:
+        if created:
             try:
                 os.fchown(lock, uid, gid)
+            except PermissionError:
+                pass  # not actually privileged enough to hand off; it is ours as created
             except OSError as exc:
                 raise SignerError(f"mirror.lock: {exc}") from exc
         elif info.st_uid != uid:
@@ -339,12 +344,13 @@ def write_state(directory: int, filename: str, state: MirrorState, owner: str | 
     try:
         # Unbuffered writes avoid a second flush during close masking a write error.
         with os.fdopen(fd, "wb", buffering=0) as stream:
-            if os.geteuid() == 0:
-                uid, gid = store_uid(owner)
-                try:
-                    os.fchown(stream.fileno(), uid, gid)
-                except OSError as exc:
-                    raise SignerError(f"fchown {temporary}: {exc}") from exc
+            uid, gid = store_uid(owner)
+            try:
+                os.fchown(stream.fileno(), uid, gid)
+            except PermissionError:
+                pass  # not actually privileged enough to hand off; it is ours as created
+            except OSError as exc:
+                raise SignerError(f"fchown {temporary}: {exc}") from exc
             payload = (json.dumps(asdict(state), ensure_ascii=False) + "\n").encode()
             remaining = memoryview(payload)
             while remaining:

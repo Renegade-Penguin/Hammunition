@@ -67,8 +67,11 @@ RUN if [ -n "${IDENTITY_PACKAGE}" ]; then \
     fi
 
 # python3-venv gives us a vendored virtualenv; we never touch system site-packages.
+# bubblewrap: the offline source-build and vendor-.deb sandboxes (#381) run
+# real bwrap subprocesses even under test, so the target needs it installed,
+# not just mocked.
 RUN apt_step --no-install-recommends \
-      python3 python3-venv python3-pip ca-certificates apt-utils openssh-client git
+      python3 python3-venv python3-pip ca-certificates apt-utils openssh-client git bubblewrap
 
 # Vendored virtualenv, exactly as the shipped .deb will do (DESIGN.md §5).
 RUN python3 -m venv /opt/hammunition-venv

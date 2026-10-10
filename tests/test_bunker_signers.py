@@ -239,10 +239,20 @@ def test_owner_handoff(
 ) -> None:
     _, state = enrolled_state
     uid, gid = os.geteuid(), os.getegid()
+    if uid == 0:
+        # Already real root (a CI container): fall back to an arbitrary
+        # non-root stand-in so owner_aware_dir's refusal of pw_uid == 0
+        # (root is never a valid handoff target) does not also catch the
+        # simulated operator. Real root's CAP_CHOWN lets fchown reassign to
+        # it; a genuinely unprivileged run instead reuses its own uid so the
+        # "handoff" fchown is a same-owner no-op requiring no privilege.
+        uid, gid = 65534, 65534
     entry = pwd.struct_passwd(("operator", "x", uid, gid, "", str(tmp_path), "/bin/sh"))
     monkeypatch.setattr(os, "geteuid", lambda: 0)
     monkeypatch.setattr(pwd, "getpwnam", lambda name: entry)
-    (tmp_path / "store").mkdir()
+    store = tmp_path / "store"
+    store.mkdir()
+    os.chown(store, uid, gid)  # must already belong to the operator; see open_operator_dir
     real_replace = os.replace
     real_fchown = os.fchown
     handoffs: list[tuple[int, int, int]] = []
