@@ -390,17 +390,25 @@ def test_security_key_type_without_token(wire: dict[str, object]) -> None:
 
 
 @pytest.mark.parametrize(
-    "raw,reason",
+    "raw,reasons",
     [
-        (b'{"last_run":' + b"[" * 200_000 + b"0" + b"]" * 200_000 + b"}", "recursion"),
-        (b'{"serial":' + b"9" * 5000 + b"}", "integer"),
+        # Python 3.14's json decoder reports deep nesting as a "stack
+        # overflow" ValueError rather than 3.11-3.13's RecursionError whose
+        # message says "recursion"; parse() wraps whichever verbatim, so the
+        # test accepts either wording instead of pinning CPython's text.
+        (
+            b'{"last_run":' + b"[" * 200_000 + b"0" + b"]" * 200_000 + b"}",
+            ("recursion", "stack overflow"),
+        ),
+        (b'{"serial":' + b"9" * 5000 + b"}", ("integer",)),
     ],
     ids=["deep-nesting", "oversized-integer"],
 )
-def test_parser_resource_errors_are_catalogue_errors(raw: bytes, reason: str) -> None:
+def test_parser_resource_errors_are_catalogue_errors(raw: bytes, reasons: tuple[str, ...]) -> None:
     with pytest.raises(CatalogueError, match=r"^catalogue:") as caught:
         parse(raw)
-    assert reason in str(caught.value).lower()
+    message = str(caught.value).lower()
+    assert any(reason in message for reason in reasons)
 
 
 @pytest.mark.parametrize(
