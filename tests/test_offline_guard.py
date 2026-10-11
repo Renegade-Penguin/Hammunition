@@ -70,6 +70,7 @@ def _sandbox_probe_says_bwrap_works(monkeypatch: pytest.MonkeyPatch) -> None:
     refusal fake it as "none" themselves, after this runs."""
     monkeypatch.setattr(cli.netiso, "detect", lambda *a, **k: "bwrap")
 
+
 REPO = Path(__file__).resolve().parents[1]
 REAL_CATALOG = REPO / "catalog"
 
