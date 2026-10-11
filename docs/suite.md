@@ -19,7 +19,7 @@ catalog carries for each, how to install it and what has been measured.
 
 | Project | What it is | Status | Needs the engine? |
 |---|---|---|---|
-| [Hammunition](https://github.com/Renegade-Penguin/Hammunition) | The engine and the catalog: installs, configures and documents the software | Pre-1.0 (v0.21.0 in this tree) | It *is* the engine |
+| [Hammunition](https://github.com/Renegade-Penguin/Hammunition) | The engine and the catalog: installs, configures and documents the software | Pre-1.0 (v0.22.0 in this tree) | It *is* the engine |
 | [Hammunition Tray](https://github.com/Renegade-Penguin/hammunition-tray) | System-tray switches to park GPS, modem, Bluetooth and camera and to start services | v0.5.0 pinned; the Qt tray is built, not yet run on any desktop it lists | Yes |
 | [Hammunition Hill](https://github.com/Renegade-Penguin/hammunition-hill) | A ham-radio dashboard in your browser | v1.3.0 pinned by the catalog (the repeaters panel with the area selector); upstream may be newer | No |
 | [Hammunition Bunker](https://github.com/Renegade-Penguin/hammunition-bunker) | A LAN server that keeps verified copies of the offline data | 0.1.0, unreleased: tested against a fake engine, never run on a NAS | Yes |

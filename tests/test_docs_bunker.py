@@ -40,8 +40,17 @@ def test_d085_and_offline_remedies_are_documented() -> None:
     assert "apt and pip" in guide and "phase 2" in guide
     assert "not on bunker" in problems and "30 days" in problems
     assert "pam" in guide
+    # The fragment is deleted when the release assembles it; the entry then
+    # lives in the CHANGELOG, so look in whichever holds it.
     fragment = ROOT / "changelog.d/381-offline-bunker.added.md"
-    assert "#381" in fragment.read_text() and "D-085" in fragment.read_text()
+    if fragment.exists():
+        entry = fragment.read_text()
+    else:
+        changelog = (ROOT / "CHANGELOG.md").read_text()
+        entry = "\n".join(
+            line for line in changelog.splitlines() if line.startswith("- #381 (D-085)")
+        )
+    assert "#381" in entry and "D-085" in entry
 
 
 def test_the_claude_md_decisions_table_carries_d085() -> None:

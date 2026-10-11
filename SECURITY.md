@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-The latest tagged release is supported (currently v0.21.0). Fixes land on
+The latest tagged release is supported (currently v0.22.0). Fixes land on
 `main` and ship in the next tag; older tags are not patched.
 
 ## Reporting a vulnerability

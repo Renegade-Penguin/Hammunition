@@ -1,1 +1,0 @@
-- The project moved from the `ChiefGyk3D` user to the `Renegade-Penguin` organization (#359, epic #357): every suite repository URL, the Pages site URL, the engine's `User-Agent` strings, the polkit `vendor_url` and the catalog manifests that pin the suite's own releases now point at the organization. `CHANGELOG.md` and the session log keep their history as written.

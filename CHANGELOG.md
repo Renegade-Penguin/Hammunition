@@ -14,6 +14,47 @@ naming the PR and the decision it rests on. Decisions are authoritative in
 
 Nothing yet.
 
+## v0.22.0 — 2026-10-11 — offline Bunker catalogue, venv wrapper ownership, user-service disclosure
+
+- #381 (D-085): Enrol signed Bunker catalogues, resolve data with publishers unreachable, fetch pinned payloads and git bundles from the Bunker, and check hardware signing readiness without enabling PAM.
+
+- `meshtasticd`, the Meshtastic node daemon for Linux, from the Meshtastic project's own repositories (the openSUSE Build Service on Debian 13, Parrot and Kali; the Launchpad PPA on Ubuntu 24.04, Mint 22.3 and Ubuntu 26.04) under D-040: the key fingerprints are pinned from the published keys, consent is typing the fingerprint, and the package's boot service, its world-writable udev line and its system user are disclosed in the plan. It joins the `mesh` profile. A flat repository (`Suites: ./`, no `Components:`) and three disclosure-only `system_modifications` kinds are the engine additions (D-040's amendment of 2026-10-05); the question of a gate of its own is Q-023 (#308, #105).
+
+- Keep the suite board current: a `project-sync` caller for GYST v1.12.0 (Hammunition #362) adds this repository's issues and pull requests to the Renegade-Penguin board, sets status and done date, and reconciles weekly.
+
+- The plan now discloses a user service's first-start behaviour (manifest field `first_start`) under *User services*, and the uninstall plan names what it leaves in place (manifest field `left_in_place`), filled in for `rns`, `lxmf` and `nomadnet`; both are validated, cleaned of control characters, capped, and shown without ever being acted on (issue #289, D-086).
+
+- CI: the security workflow pins GYST v1.13.0, which runs gitleaks as a sha256-pinned binary instead of the licence-gated action; Security runs are green again under the organization (#362)
+- `.gitleaks.toml` allowlists OpenPGP v4 key fingerprints (the D-040 `key_fingerprint:` pins); the binary scan had flagged nine of them as generic API keys, and a planted AWS key is still caught (#369).
+
+- `hammunition-hill` pinned to v1.3.0: the repeaters panel follows the engine's active areas with per-session chips (hill #90, D-082), Atheris fuzz targets through GYST (hill #89) and the security sweep (hill #88); digest read from the release's SHA256SUMS and confirmed against the downloaded file.
+
+- The project moved from the `ChiefGyk3D` user to the `Renegade-Penguin` organization (#359, epic #357): every suite repository URL, the Pages site URL, the engine's `User-Agent` strings, the polkit `vendor_url` and the catalog manifests that pin the suite's own releases now point at the organization. `CHANGELOG.md` and the session log keep their history as written.
+
+- GYST callers to v1.12.0 (every input they pass exists in v1.12.0; v1.11.0 to v1.12.0 changed only `project-sync.yml`).
+
+- CI: the project-sync caller no longer runs on pull request events; Doppler OIDC cannot cover a pull-request subject (git-your-ship-together#93), so the `sync / Sync project` check was red on every PR. Pull requests reach the board through the weekly reconcile (#376).
+
+- A venv unit no longer replaces a `~/.local/bin` entry Hammunition did not write (#288, D-022, amending D-080): the plan refuses by name, with a remedy, any command that is a pipx symlink, a pip script or anything without Hammunition's wrapper header, and the write re-checks and never writes through a link; re-installing over its own wrappers (also the pre-header form) still works. Review round 2: an `expose` or node `command` name must be one plain file name (no `../`, no absolute path, no control character), a wrapper is mode 0755 whatever the umask, and `uninstall` opens the entry through a directory descriptor, refuses a symlinked ancestor when running as root for an operator, and removes only the inode it read.
+
+- `uninstall` left every apt package behind as "installed, but not installed by Hammunition" since #236: the attribution read `argv[1]` of `apt-get -o Acquire::Retries=3 install ...` as the verb and saw `-o`. The verb is now the first non-option argument, and the engine's own `install --simulate` pre-flight never attributes a package (found installing and removing `meshtasticd`, #308).
+
+- Code scanning, second pass: removed the unused `SELF_UPDATE_ARGV`, parenthesised the split update-dialog paragraph, a direct reference in place of a wrapper lambda in the self-update test, a reason on the fuzz target's expected-refusal catch. The `station show` CodeQL "secret" alert and the `US_STATE_NAMES` unused-variable alert are false positives, dismissed, and the links directory's 0700 `chmod` alert (marked in source, which Semgrep honours: its SARIF carries the finding as suppressed) is dismissed as by design.
+
+- Activity hub pages for GPS, position and time, APRS, Meshtastic, Reticulum and MeshCore (a stub), under `docs/activities/`: what the activity is, the catalog's programs and hardware (generated by `scripts/gen_activity_hubs.py`, held by `tests/test_docs_generated.py`), how to install, a first task, what works offline, and what was measured and not; linked from the suite page and the application directory (#305, part of #298).
+
+- `docs/reference/cli.md`: the `artifacts` default unit list now names `repeater-snapshots`, which the command has listed since D-078 (branch `artifacts-doc-default`).
+
+- The Hammunition logo (drawn by the maintainer 2026-10-05) and a brand package in Hill's layout: `brand/` marks, favicons, social preview and a sampled palette, the README and site headers, the site favicon, and `docs/contributing/branding.md` (#374).
+
+- Console coverage (#323): `docs/reference/console-coverage.md` is generated from the CLI's argparse tree against `hammunition.console.coverage`, and `tests/console/test_coverage.py` fails on an unclassified verb, a covered verb its screen does not name, or a growing uncovered list (31 verbs still have no screen, each with its issue).
+
+- README carries the OpenSSF Best Practices badge; project 15243 passes all 67 Passing criteria (#370).
+
+- D-083: review policy under one maintainer: a pull request with zero approvals on `main`, a `CODEOWNERS` file, administrators not enforced, the Scorecard Code-Review score left at 0 by record; revisited when a second maintainer joins (#333, PR #368)
+
+- D-084: targets are releases in regular support (Debian 12 not planned, Kali best effort, LTS and stable preferred); the uConsole image is the one exception to "no custom ISO", conditional on Debian 13 not being documentable onto the device (epic #372).
+
 ## v0.21.0 — 2026-10-04
 
 - The console's **Repeaters** screen (`7` on Home, #322): the repeater layers grouped by area with the active mark, the areas, and keys to fetch RepeaterBook by state (opening Secrets first when `REPEATERBOOK` cannot be supplied), import an export, choose the active areas, remove a layer and look repeaters up by place, distance, band and mode; and, from both it and Secrets, an offer to install `repeaterbook-client` when it is missing, the fetch running after a successful install (#344). D-059, D-064, D-074, D-081, D-082.

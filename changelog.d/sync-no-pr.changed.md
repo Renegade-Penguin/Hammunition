@@ -1,1 +1,0 @@
-- CI: the project-sync caller no longer runs on pull request events; Doppler OIDC cannot cover a pull-request subject (git-your-ship-together#93), so the `sync / Sync project` check was red on every PR. Pull requests reach the board through the weekly reconcile (#376).

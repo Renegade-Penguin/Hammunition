@@ -1,1 +1,0 @@
-- `hammunition-hill` pinned to v1.3.0: the repeaters panel follows the engine's active areas with per-session chips (hill #90, D-082), Atheris fuzz targets through GYST (hill #89) and the security sweep (hill #88); digest read from the release's SHA256SUMS and confirmed against the downloaded file.

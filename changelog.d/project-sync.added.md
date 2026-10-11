@@ -1,1 +1,0 @@
-- Keep the suite board current: a `project-sync` caller for GYST v1.12.0 (Hammunition #362) adds this repository's issues and pull requests to the Renegade-Penguin board, sets status and done date, and reconciles weekly.

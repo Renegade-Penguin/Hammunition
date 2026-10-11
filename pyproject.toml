@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hammunition"
-version = "0.21.0"
+version = "0.22.0"
 description = "Turn a Debian-family install into an amateur radio, SDR and RF workstation"
 readme = "README.md"
 requires-python = ">=3.11"

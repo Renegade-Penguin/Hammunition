@@ -1,1 +1,0 @@
-- D-083: review policy under one maintainer: a pull request with zero approvals on `main`, a `CODEOWNERS` file, administrators not enforced, the Scorecard Code-Review score left at 0 by record; revisited when a second maintainer joins (#333, PR #368)

@@ -1,2 +1,0 @@
-- CI: the security workflow pins GYST v1.13.0, which runs gitleaks as a sha256-pinned binary instead of the licence-gated action; Security runs are green again under the organization (#362)
-- `.gitleaks.toml` allowlists OpenPGP v4 key fingerprints (the D-040 `key_fingerprint:` pins); the binary scan had flagged nine of them as generic API keys, and a planted AWS key is still caught (#369).

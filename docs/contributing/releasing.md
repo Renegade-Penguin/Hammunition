@@ -295,7 +295,7 @@ after checking the file against the maintainer's profile as described in
 [More than one key](#more-than-one-key). A `key has expired` or `No
 principal matched` from a tag *older* than the key's `valid-before` is the
 git 2.34 behaviour, not a bad tag; run it on a machine with git 2.35 or
-later. Until a key exists, `v0.7.0`, `v0.9.0`, `v0.10.0`, `v0.11.0`, `v0.12.0`, `v0.13.0`, `v0.14.0`, `v0.14.1`, `v0.14.2`, `v0.14.3`, `v0.15.0`, `v0.16.0`, `v0.17.0`, `v0.18.0`, `v0.19.0`, `v0.20.0` and `v0.21.0` are what there is, and they
+later. Until a key exists, `v0.7.0`, `v0.9.0`, `v0.10.0`, `v0.11.0`, `v0.12.0`, `v0.13.0`, `v0.14.0`, `v0.14.1`, `v0.14.2`, `v0.14.3`, `v0.15.0`, `v0.16.0`, `v0.17.0`, `v0.18.0`, `v0.19.0`, `v0.20.0`, `v0.21.0` and `v0.22.0` are what there is, and they
 are unsigned; the first signed tag is 1.0.
 
 ## Before the tag
@@ -314,7 +314,7 @@ assembles them and moves the version in `pyproject.toml` in the same commit:
 
 ```sh
 python3 scripts/changelog.py preview        # read what the section will say
-python3 scripts/changelog.py assemble --version v0.21.0 --date 2026-10-09 \
+python3 scripts/changelog.py assemble --version v0.22.0 --date 2026-10-11 \
     --summary "what the release is about"   # new section, fragments deleted
 ```
 
