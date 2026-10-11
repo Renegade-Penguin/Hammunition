@@ -53,6 +53,7 @@ import yaml
 from .kiwix import BOOK_ID
 from .maidenhead import centre
 from .paths import owner_aware_dir
+from .urlredact import redact_mirror_url
 
 __all__ = [
     "DERIVED",
@@ -101,6 +102,7 @@ _MAP_FIELDS = frozenset({"map_regions", "map_freshness"})
 #: Kiwix books chosen for `kiwix-library` (D-066).
 _NOT_TEMPLATES = _MAP_FIELDS | {
     "mirror",
+    "mirror_require_hardware_key",
     "reference_books",
     "dem_source",
     "topo_radius_km",
@@ -166,10 +168,32 @@ RIG_VALUE = re.compile(r"^(?:hamlib:[0-9]+|[a-z0-9][a-z0-9-]*)$")
 #: construction, and ``..`` is refused separately (D-073 §4).
 RIG_DEVICE = re.compile(r"^/dev/[A-Za-z0-9#+\-.:=@_/]+$")
 
-#: A mirror is fetched by :class:`hammunition.fetch.UrllibTransport`, which
-#: speaks these and nothing else. Plain http is allowed on purpose: the
+#: A mirror is fetched over these. Plain http is allowed on purpose: the
 #: content is public data and the check is the hash, not the transport.
-MIRROR_SCHEMES = ("http", "https")
+#: ``file`` is a Bunker export directory, read only by
+#: :class:`hammunition.mirror_transport.MirrorTransport`; the publisher
+#: transport (:class:`hammunition.fetch.UrllibTransport`) speaks http(s) alone.
+MIRROR_SCHEMES = ("http", "https", "file")
+
+
+def _file_mirror_problem(value: str, parts: urllib.parse.SplitResult) -> str | None:
+    """Why *value* is not a ``file:///absolute/dir`` export, or ``None``.
+
+    The path is matched raw by the transport and walked by its decoded
+    segments, so the decoded form is what is checked for ``.``, ``..`` and
+    control characters; it is decoded once, never twice."""
+    if parts.netloc:
+        return "a file mirror names no host: write file:///absolute/path"
+    if parts.query or parts.fragment or "?" in value or "#" in value:
+        return "it has a query or a fragment; a mirror is a base URL"
+    decoded = urllib.parse.unquote(parts.path)
+    if not parts.path.startswith("/") or not decoded.strip("/"):
+        return "a file mirror needs an absolute, non-empty directory path"
+    if any(c.isspace() for c in value) or any(ord(c) < 32 or ord(c) == 127 for c in decoded):
+        return "it contains whitespace or a control character"
+    if any(segment in (".", "..") for segment in decoded.split("/")):
+        return "its path has a . or .. segment"
+    return None
 
 
 def _check_mirror(url: str) -> str:
@@ -180,17 +204,26 @@ def _check_mirror(url: str) -> str:
     operator's statement to make (D-070). A user or password is refused,
     because the station file is no place for a credential."""
     value = url.strip()
+    shown = redact_mirror_url(value)
     problem = None
+    parts: urllib.parse.SplitResult | None = None
     try:
         parts = urllib.parse.urlsplit(value)
-        parts.port  # noqa: B018 - read for its ValueError on a bad port
-    except ValueError as exc:
+        _ = parts.port  # read for its ValueError on a bad port
+    except ValueError:
+        # urlsplit's own message can quote the whole authority, user and password
+        # included, so it is neither shown nor kept as a cause or context: the
+        # error is raised below, outside this handler.
+        parts = None
+    if parts is None:
         raise StationError(
-            f"mirror {url!r} is not usable: {exc}. Expected a LAN address such as "
-            f"http://bunker.lan:8080/ (D-070)."
-        ) from exc
+            f"mirror {shown!r} is not usable: it is not a valid URL (or its port is not a "
+            f"number). Expected a LAN address such as http://bunker.lan:8080/ (D-070)."
+        )
     if parts.scheme not in MIRROR_SCHEMES:
-        problem = "it must start with http:// or https://"
+        problem = "it must start with http://, https:// or file://"
+    elif parts.scheme == "file":
+        problem = _file_mirror_problem(value, parts)
     elif not parts.hostname or any(c.isspace() for c in value):
         problem = "it names no host"
     elif parts.username is not None or parts.password is not None:
@@ -199,7 +232,7 @@ def _check_mirror(url: str) -> str:
         problem = "it has a query or a fragment; a mirror is a base URL"
     if problem is not None:
         raise StationError(
-            f"mirror {url!r} is not usable: {problem}. Expected a LAN address such as "
+            f"mirror {shown!r} is not usable: {problem}. Expected a LAN address such as "
             f"http://bunker.lan:8080/ (D-070)."
         )
     return value
@@ -229,6 +262,7 @@ class Station:
     ``ham.stackexchange.com_en_all``. None means ``kiwix-library`` is
     deferred (D-066). Which books somebody reads is not where they are, so
     these are printed where map regions are only counted."""
+    mirror_require_hardware_key: bool = False
     mirror: str | None = None
     """A LAN mirror of the catalog's data artifacts, tried before the
     publisher and verified the same way (D-070). Never an internet address."""
@@ -319,6 +353,8 @@ class Station:
             raise StationError(
                 f"map freshness {self.map_freshness!r} is not one of {', '.join(FRESHNESS)}"
             )
+        if not isinstance(self.mirror_require_hardware_key, bool):
+            raise StationError("mirror_require_hardware_key must be true or false")
         if self.mirror is not None:
             object.__setattr__(self, "mirror", _check_mirror(self.mirror))
         if self.rig is not None:
@@ -492,6 +528,10 @@ class Station:
             result["map_freshness"] = self.map_freshness
         if self.reference_books:
             result["reference_books"] = list(self.reference_books)
+        if not isinstance(self.mirror_require_hardware_key, bool):
+            raise StationError("mirror_require_hardware_key must be true or false")
+        if self.mirror_require_hardware_key:
+            result["mirror_require_hardware_key"] = True
         if self.mirror is not None:
             result["mirror"] = self.mirror
         if self.rig_baud is not None:
@@ -643,6 +683,7 @@ def load_station(path: Path | None = None, owner: str | None = None) -> Station:
         map_freshness=_str("map_freshness"),
         reference_books=_str_list("reference_books"),
         mirror=_str("mirror"),
+        mirror_require_hardware_key=data.get("mirror_require_hardware_key", False),
         rig=_str("rig"),
         rig_device=_str("rig_device"),
         rig_baud=rig_baud,
@@ -703,6 +744,7 @@ def prompt_for(variables: Sequence[str], station: Station) -> Station:
                     map_freshness=station.map_freshness,
                     reference_books=station.reference_books,
                     mirror=station.mirror,
+                    mirror_require_hardware_key=station.mirror_require_hardware_key,
                     rig_baud=station.rig_baud,
                     dem_source=station.dem_source,
                     topo_radius_km=station.topo_radius_km,
@@ -723,6 +765,7 @@ def prompt_for(variables: Sequence[str], station: Station) -> Station:
         map_freshness=station.map_freshness,
         reference_books=station.reference_books,
         mirror=station.mirror,
+        mirror_require_hardware_key=station.mirror_require_hardware_key,
         rig_baud=station.rig_baud,
         dem_source=station.dem_source,
         topo_radius_km=station.topo_radius_km,

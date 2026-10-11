@@ -34,9 +34,10 @@ from __future__ import annotations
 
 import pwd
 import re
-from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from hammunition.backends import (
     DISCLOSED_ONLY_MODIFICATIONS,
@@ -87,20 +88,42 @@ from hammunition.manifest.schema import (
     VenvInstall,
     effective_binaries,
 )
+from hammunition.resolution import CatalogueMiss
 from hammunition.state.log import TransactionLog
 from hammunition.state.uninstall import deb_attributed
 from hammunition.station import Station
 from hammunition.userservice import PlannedUserService, plan_user_services, service_venv_dir
 
+if TYPE_CHECKING:
+    from hammunition.fetch import Fetcher
+    from hammunition.manifest.schema import DataArtifact, RemoteArtifact
+    from hammunition.resolution import ResolutionContext
+
 __all__ = [
     "Blocker",
+    "DebDependency",
+    "DebDependencyError",
     "Deferral",
     "GroupMembership",
     "InstallPlan",
     "PlanError",
     "PlannedPackage",
     "RepoAddition",
+    "cached_data_pin",
+    "cached_remote",
+    "catalogue_deferral",
+    "compare_deb_versions",
+    "deb_dependency_met",
+    "deb_group_met",
+    "deb_probe_names",
+    "offline_network_blockers",
+    "offline_payload_blockers",
+    "parse_deb_dependencies",
+    "parse_deb_depends",
+    "payload_misses",
+    "preflight_data",
     "resolve",
+    "valid_deb_version",
 ]
 
 REQUESTED_DIRECTLY = "requested"
@@ -1270,6 +1293,637 @@ def _deb_installed(
     return deb_attributed(log, sha256=method.artifact.sha256, deb_package=method.deb_package)
 
 
+# ---------------------------------------------------------------------------
+# Offline resolution (#381): what the Bunker's catalogue answers for
+# ---------------------------------------------------------------------------
+
+OFFLINE_APT_REMEDY = (
+    "install it while the apt archive is reachable, or wait for apt served by the Bunker "
+    "(phase 2 of #381); an offline run never calls apt-get update or fetches a package"
+)
+
+OFFLINE_PHASE_2 = (
+    "serve this unit's dependencies from the Bunker (phase 2 of #381), or install it while "
+    "online; phase 1 carries pinned payloads and map data only"
+)
+
+OFFLINE_PAYLOAD_REMEDY = (
+    "run it once online so the verified download is cached, or wait for the Bunker route "
+    "for source and binary payloads (#381)"
+)
+
+OFFLINE_ISOLATION_REMEDY = (
+    "install bubblewrap (bwrap) and make sure it can create user namespaces while online, "
+    "or run this unit online"
+)
+
+CATALOGUE_REMEDY = "populate this selection on the Bunker, or retry with the publisher reachable"
+
+
+def _offline_apt_blockers(
+    resolved: Sequence[tuple[PackageManifest, InstallBlock, tuple[str, ...], tuple[str, ...]]],
+    outstanding: set[str],
+) -> list[Blocker]:
+    """One blocker per unit that needs an apt package this machine lacks."""
+    out: list[Blocker] = []
+    for manifest, _block, packages, _build_only in resolved:
+        missing = [p for p in packages if p in outstanding]
+        if not missing:
+            continue
+        shown = ", ".join(missing[:6]) + (
+            f" and {len(missing) - 6} more" if len(missing) > 6 else ""
+        )
+        out.append(
+            Blocker(
+                subject=manifest.name,
+                reason=f"offline: needs apt package(s) this machine does not have: {shown}",
+                remedy=OFFLINE_APT_REMEDY,
+            )
+        )
+    return out
+
+
+def _offline_repo_blockers(additions: Sequence[RepoAddition]) -> list[Blocker]:
+    """A third-party apt repository cannot be added without ``apt-get update``."""
+    return [
+        Blocker(
+            subject=addition.unit,
+            reason=(
+                f"offline: it adds the apt repository {addition.repo.name}, whose index "
+                "only `apt-get update` can fetch"
+            ),
+            remedy=OFFLINE_APT_REMEDY,
+        )
+        for addition in additions
+    ]
+
+
+def offline_network_blockers(plan: InstallPlan, built: frozenset[str]) -> list[Blocker]:
+    """Steps an offline run would have to send to the network, refused by name.
+
+    A pip virtual environment is resolved against PyPI on every install, a git
+    block with ``build_python`` lines installs them with pip, and a Node build
+    runs ``npm ci``: none of them has a Bunker route in phase 1. A unit whose
+    build is already attributed at its pin (``built``) plans none of its build
+    steps, so it is not named."""
+    out: list[Blocker] = []
+    for unit in plan.packages:
+        if unit.name in built:
+            continue
+        block = unit.block.install
+        if isinstance(block, VenvInstall):
+            tool = "pip"
+        elif isinstance(block, GitInstall) and block.build_python:
+            tool = "pip (build_python)"
+        elif isinstance(block, NodeInstall):
+            tool = "npm"
+        else:
+            continue
+        out.append(
+            Blocker(
+                subject=unit.name,
+                reason=f"offline: its install runs {tool}, which fetches from a package index",
+                remedy=OFFLINE_PHASE_2,
+            )
+        )
+    return out
+
+
+def catalogue_deferral(unit: PlannedPackage, exc: CatalogueMiss) -> Deferral:
+    """What an unresolved catalogue entry does to *unit*: refuse it by name when
+    the operator typed it, otherwise defer the whole unit (D-039)."""
+    if REQUESTED_DIRECTLY in unit.requested_by:
+        raise PlanError([Blocker(unit.name, str(exc), CATALOGUE_REMEDY)])
+    return Deferral(
+        unit.name, "will not install this unit this run", str(exc), CATALOGUE_REMEDY, "package"
+    )
+
+
+def cached_remote(fetcher: Fetcher, artifact: RemoteArtifact) -> bool:
+    """Whether *artifact*'s verified bytes are already in the artifact cache.
+
+    True only on an exact sha256 match of the content-addressed file; it never
+    fetches, and a symlink or unreadable file is not a hit."""
+    from hammunition.fetch import _digest_file
+
+    path = fetcher.path_for(artifact)
+    try:
+        return path.is_file() and not path.is_symlink() and _digest_file(path) == artifact.sha256
+    except OSError:
+        return False
+
+
+def cached_data_pin(fetcher: Fetcher, pin: DataArtifact) -> bool:
+    """Whether *pin*'s verified bytes are already in the artifact cache: the
+    exact size and sha256 of the content-addressed file."""
+    from hammunition.manifest.schema import RemoteArtifact
+
+    remote = RemoteArtifact(url=pin.url, sha256=pin.sha256)
+    try:
+        return (
+            cached_remote(fetcher, remote) and fetcher.path_for(remote).stat().st_size == pin.size
+        )
+    except OSError:
+        return False
+
+
+def _remote_artifacts(node: object) -> list[RemoteArtifact]:
+    """Every pinned download a block declares, wherever it sits in the block."""
+    from pydantic import BaseModel
+
+    from hammunition.manifest.schema import RemoteArtifact
+
+    if isinstance(node, RemoteArtifact):
+        return [node]
+    found: list[RemoteArtifact] = []
+    if isinstance(node, BaseModel):
+        for value in vars(node).values():
+            found.extend(_remote_artifacts(value))
+    elif isinstance(node, list | tuple):
+        for value in node:
+            found.extend(_remote_artifacts(value))
+    elif isinstance(node, dict):
+        for value in node.values():
+            found.extend(_remote_artifacts(value))
+    return found
+
+
+class DebDependencyError(ValueError):
+    """A Depends/Pre-Depends field that does not parse. Always a refusal: an
+    unparsed relation is never read as "no relation"."""
+
+
+@dataclass(frozen=True)
+class DebDependency:
+    """One alternative of a ``Depends`` group: a package name, the architecture
+    qualifier it carries (``any``, ``native`` or an architecture), and the
+    version relation it needs (``<<``, ``<=``, ``=``, ``>=``, ``>>``)."""
+
+    name: str
+    relation: str | None = None
+    version: str | None = None
+    arch: str | None = None
+
+    def text(self) -> str:
+        base = self.name if self.arch is None else f"{self.name}:{self.arch}"
+        return base if self.relation is None else f"{base} ({self.relation} {self.version})"
+
+
+#: What a qualifier after the colon may be: ``any``, ``native`` or a Debian
+#: architecture name (lowercase letters, digits and hyphens, starting with one).
+_DEB_ARCH = re.compile(r"[a-z0-9][a-z0-9\-]*", re.ASCII)
+
+_DEB_ALTERNATIVE = re.compile(
+    r"^(?P<name>[a-z0-9][a-z0-9+.\-]+)"
+    r"(?::(?P<arch>[^\s()|,:]*))?"
+    r"(?:\s*\(\s*(?P<op><<|<=|>=|>>|=|<|>)\s*(?P<version>[^\s()]+)\s*\))?",
+    re.ASCII,
+)
+_DEB_REVISION = re.compile(r"[A-Za-z0-9+.~]+")
+_DEB_UPSTREAM = re.compile(r"[0-9][A-Za-z0-9.+~\-:]*")
+
+
+def _deb_split(version: str) -> tuple[int, str, str] | None:
+    """``(epoch, upstream, revision)`` of a version that follows Debian policy
+    (digits-only epoch, upstream starting with a digit, only the allowed
+    characters), else None. The empty string is not a policy version."""
+    if not version.isascii():
+        return None
+    epoch = 0
+    rest = version
+    if ":" in version:
+        head, rest = version.split(":", 1)
+        if not head.isdigit():
+            return None
+        epoch = int(head)
+    upstream, revision = rest, ""
+    if "-" in rest:
+        upstream, revision = rest.rsplit("-", 1)
+        if not _DEB_REVISION.fullmatch(revision):
+            return None
+    if not _DEB_UPSTREAM.fullmatch(upstream):
+        return None
+    return epoch, upstream, revision
+
+
+def valid_deb_version(version: str) -> bool:
+    """Whether *version* follows Debian policy."""
+    return _deb_split(version) is not None
+
+
+def parse_deb_dependencies(field_text: str) -> list[list[DebDependency]]:
+    """``Depends``/``Pre-Depends`` text as groups of alternatives.
+
+    A strict grammar: ``name[:arch] [(op version)]`` alternatives joined by
+    ``|``, groups joined by ``,``. ``<`` and ``>`` are dpkg's deprecated
+    spellings of ``<=`` and ``>=``. An empty field is no dependencies; anything
+    else that does not match (an unbalanced parenthesis, a relation that does not
+    exist, an empty group or alternative, trailing text, a build-time restriction,
+    an unknown architecture qualifier, a version that breaks policy) raises
+    :class:`DebDependencyError`."""
+    text = " ".join(field_text.split())
+    if not text:
+        return []
+    groups: list[list[DebDependency]] = []
+    for clause in text.split(","):
+        alternatives: list[DebDependency] = []
+        for raw in clause.split("|"):
+            found = _DEB_ALTERNATIVE.fullmatch(raw.strip())
+            if found is None:
+                raise DebDependencyError(f"cannot read {raw.strip()!r} as a dependency")
+            arch = found.group("arch")
+            if arch is not None and not _DEB_ARCH.fullmatch(arch):
+                raise DebDependencyError(
+                    f"unknown architecture qualifier :{arch} in {raw.strip()!r}"
+                )
+            relation = found.group("op")
+            version = found.group("version")
+            if relation is not None:
+                relation = {"<": "<=", ">": ">="}.get(relation, relation)
+                assert version is not None
+                if not valid_deb_version(version):
+                    raise DebDependencyError(
+                        f"{version!r} in {raw.strip()!r} is not a valid Debian version"
+                    )
+            alternatives.append(DebDependency(found.group("name"), relation, version, arch))
+        groups.append(alternatives)
+    return groups
+
+
+def parse_deb_depends(field_text: str) -> list[list[str]]:
+    """``Depends``/``Pre-Depends`` text as groups of alternatives, names only
+    (:func:`parse_deb_dependencies` keeps versions and qualifiers)."""
+    return [[d.name for d in group] for group in parse_deb_dependencies(field_text)]
+
+
+def _deb_order(char: str) -> int:
+    if char.isdigit() or not char:
+        return 0
+    if char.isalpha():
+        return ord(char)
+    if char == "~":
+        return -1
+    return ord(char) + 256
+
+
+def _deb_verrevcmp(a: str, b: str) -> int:
+    i = j = 0
+    while i < len(a) or j < len(b):
+        while (i < len(a) and not a[i].isdigit()) or (j < len(b) and not b[j].isdigit()):
+            difference = _deb_order(a[i] if i < len(a) else "") - _deb_order(
+                b[j] if j < len(b) else ""
+            )
+            if difference:
+                return difference
+            i += 1
+            j += 1
+        while i < len(a) and a[i] == "0":
+            i += 1
+        while j < len(b) and b[j] == "0":
+            j += 1
+        first = 0
+        while i < len(a) and a[i].isdigit() and j < len(b) and b[j].isdigit():
+            if not first:
+                first = ord(a[i]) - ord(b[j])
+            i += 1
+            j += 1
+        if i < len(a) and a[i].isdigit():
+            return 1
+        if j < len(b) and b[j].isdigit():
+            return -1
+        if first:
+            return first
+    return 0
+
+
+def compare_deb_versions(a: str, b: str) -> int:
+    """Debian's version order (epoch, upstream, revision; ``~`` sorts before
+    everything): negative, zero or positive as *a* is older than, equal to or
+    newer than *b*. The empty version is older than any other and equal to
+    itself, as dpkg orders it. A non-empty version that breaks Debian policy
+    raises :class:`ValueError`."""
+    if not a or not b:
+        return (a != "") - (b != "")
+    parts_a, parts_b = _deb_split(a), _deb_split(b)
+    for version, parts in ((a, parts_a), (b, parts_b)):
+        if parts is None:
+            raise ValueError(f"{version!r} is not a valid Debian version")
+    assert parts_a is not None and parts_b is not None
+    if parts_a[0] != parts_b[0]:
+        return parts_a[0] - parts_b[0]
+    return _deb_verrevcmp(parts_a[1], parts_b[1]) or _deb_verrevcmp(parts_a[2], parts_b[2])
+
+
+def deb_dependency_met(dependency: DebDependency, installed: str | None) -> bool:
+    """Whether an installed version (None: not installed) satisfies *dependency*'s
+    version relation. An installed version that is not a valid Debian version
+    meets nothing."""
+    if installed is None or not valid_deb_version(installed):
+        return False
+    if dependency.relation is None or dependency.version is None:
+        return True
+    order = compare_deb_versions(installed, dependency.version)
+    return {
+        "<<": order < 0,
+        "<=": order <= 0,
+        "=": order == 0,
+        ">=": order >= 0,
+        ">>": order > 0,
+    }[dependency.relation]
+
+
+def deb_probe_names(
+    dependency: DebDependency, native: str, foreign: Sequence[str] = ()
+) -> tuple[str, ...]:
+    """The names apt is asked about to find *dependency*'s installed package: a
+    bare name is the native one; ``:any`` is the native and every foreign
+    architecture dpkg knows; ``:native`` and an explicit architecture are that
+    one."""
+    name = dependency.name
+    if dependency.arch is None:
+        return (name,)
+    if dependency.arch == "any":
+        return (name, *(f"{name}:{arch}" for arch in (native, *foreign)))
+    arch = native if dependency.arch == "native" else dependency.arch
+    return (name, f"{name}:{arch}") if arch == native else (f"{name}:{arch}",)
+
+
+def deb_group_met(
+    group: Sequence[DebDependency],
+    installed: Mapping[str, str | None],
+    native: str,
+    foreign: Sequence[str] = (),
+) -> bool:
+    """Whether any alternative of *group* has an installed package, at its stated
+    architecture, whose version is in range. *installed* maps the names
+    :func:`deb_probe_names` gives to the installed version (None: absent)."""
+    return any(
+        deb_dependency_met(dependency, installed.get(candidate))
+        for dependency in group
+        for candidate in deb_probe_names(dependency, native, foreign)
+    )
+
+
+def _routed_payload(block: object) -> RemoteArtifact | None:
+    """The one pinned download of a source, binary, venv-payload or Node block."""
+    if isinstance(block, SourceInstall):
+        return block.source
+    if isinstance(block, BinaryInstall | NodeInstall):
+        return block.artifact
+    if isinstance(block, VenvInstall):
+        return block.payload
+    return None
+
+
+def payload_misses(
+    plan: InstallPlan,
+    context: ResolutionContext,
+    built: frozenset[str],
+    *,
+    cached: Callable[[RemoteArtifact], bool],
+) -> dict[str, CatalogueMiss]:
+    """Offline, the pinned payload of every source, binary, venv and Node unit the
+    verified Bunker cannot answer for (and the cache does not hold), by unit.
+
+    The same check each backend makes before returning steps, asked here so a
+    missing payload defers the whole unit (or refuses a typed one) through
+    :func:`catalogue_deferral` instead of failing while steps are built. A unit
+    already built at its pin, or a .deb already installed, is not asked about.
+    Online (``preflight_payloads`` asks nothing) the result is empty."""
+    from hammunition.payloads import preflight_payloads
+
+    misses: dict[str, CatalogueMiss] = {}
+    for unit in plan.packages:
+        block = unit.block.install
+        pin = _routed_payload(block)
+        if pin is None or (unit.name in built and not isinstance(block, VenvInstall | NodeInstall)):
+            continue
+        if isinstance(block, BinaryInstall) and unit.deb_installed:
+            continue
+        try:
+            preflight_payloads(unit.name, ((pin, None),), context=context, cached=cached)
+        except CatalogueMiss as exc:
+            misses[unit.name] = exc
+    return misses
+
+
+def offline_payload_blockers(
+    plan: InstallPlan,
+    built: frozenset[str],
+    *,
+    cached: Callable[[RemoteArtifact], bool],
+    deb_unmet: Callable[[PlannedPackage], list[str]],
+    isolated: bool = True,
+    deb_isolated: bool = True,
+) -> list[Blocker]:
+    """Downloads an offline run could not make, refused at plan time by name.
+
+    A derived-data or other pinned payload with no Bunker route proceeds only
+    when its bytes are already in the verified cache or the unit is already
+    built. Source, binary, venv and Node payloads have one (:func:`payload_misses`).
+    A vendor ``.deb`` is installed with ``apt-get install ./file.deb``, which
+    resolves its dependencies against the archive: offline it proceeds only when
+    every dependency group already has a suitable installed package, version
+    included (*deb_unmet* names the ones that do not), checked here when its
+    bytes are cached and by the install after its fetch when they are not. Units refused by :func:`offline_network_blockers`, and
+    the data kinds :func:`preflight_data` decides, are not repeated here."""
+    from hammunition.manifest.schema import BinaryInstall, DataInstall, RegisterInstall
+
+    out: list[Blocker] = []
+    for unit in plan.packages:
+        block = unit.block.install
+        if unit.name in built or isinstance(
+            block,
+            DataInstall | RegisterInstall | AptInstall | VenvInstall | NodeInstall | GitInstall,
+        ):
+            continue
+        if isinstance(block, SourceInstall):
+            # Its payload is routed through the Bunker (payload_misses); its build
+            # runs upstream's code, which offline must have no network.
+            if not isolated:
+                out.append(
+                    Blocker(
+                        subject=unit.name,
+                        reason=(
+                            "offline: building it runs upstream's build code, which must have no "
+                            "network and no way to reach a host UNIX socket (docker, dbus, a "
+                            "proxy), and this machine has no working bwrap sandbox"
+                        ),
+                        remedy=OFFLINE_ISOLATION_REMEDY,
+                    )
+                )
+            continue
+        # A vendor .deb is routed too; only its dependencies are checked here, and
+        # only once its bytes are local to read them from. An uncached one is
+        # checked by the install itself, after its fetch (BinaryBackend).
+        missing = (
+            []
+            if isinstance(block, BinaryInstall)
+            else [a for a in _remote_artifacts(block) if not cached(a)]
+        )
+        if missing:
+            shown = ", ".join(a.url for a in missing[:3]) + (
+                f" and {len(missing) - 3} more" if len(missing) > 3 else ""
+            )
+            out.append(
+                Blocker(
+                    subject=unit.name,
+                    reason=(
+                        f"offline: it downloads {shown}, which has no Bunker route yet and "
+                        "is not in the local cache"
+                    ),
+                    remedy=OFFLINE_PAYLOAD_REMEDY,
+                )
+            )
+            continue
+        if (
+            isinstance(block, BinaryInstall)
+            and block.format == "deb"
+            and not unit.deb_installed
+            and not deb_isolated
+        ):
+            out.append(
+                Blocker(
+                    subject=unit.name,
+                    reason=(
+                        "offline: its .deb is installed with its maintainer scripts and "
+                        "triggers inside the bwrap sandbox so they have no network and no "
+                        "pathname socket to bridge through, and this machine has none that "
+                        "works"
+                    ),
+                    remedy="install bubblewrap (bwrap) while online, or run this unit online",
+                )
+            )
+            continue
+        if (
+            isinstance(block, BinaryInstall)
+            and block.format == "deb"
+            and not unit.deb_installed
+            and cached(block.artifact)
+        ):
+            unmet = deb_unmet(unit)
+            if unmet:
+                out.append(
+                    Blocker(
+                        subject=unit.name,
+                        reason=(
+                            "offline: its .deb is installed by apt, which would fetch what it "
+                            f"depends on and this machine lacks: {', '.join(unmet)}"
+                        ),
+                        remedy=OFFLINE_APT_REMEDY,
+                    )
+                )
+    return out
+
+
+def preflight_data(
+    plan: InstallPlan,
+    context: ResolutionContext,
+    *,
+    cached: Callable[[str, DataArtifact], bool],
+) -> InstallPlan:
+    """Offline, drop every data unit the Bunker cannot fully supply.
+
+    A unit with any artifact neither cached nor on the Bunker (matching the
+    repository's own sha256 and size) gets no steps at all: a profile member is
+    deferred by name, a unit the operator typed refuses. A register download
+    with no digest is only taken from a catalogue entry labelled unverified.
+    Every miss in a unit is named together, and a unit that depends on a
+    dropped unit is dropped with it. Online it returns *plan* unchanged."""
+    if not context.offline:
+        return plan
+    from hammunition.acma import FILE_NAME
+    from hammunition.backends.data import data_name
+    from hammunition.manifest.schema import DataInstall, RegisterInstall
+
+    misses: dict[str, CatalogueMiss] = {}
+    for unit in plan.packages:
+        block = unit.block.install
+        found: list[str] = []
+        if isinstance(block, DataInstall):
+            for pin in block.artifacts:
+                if cached(unit.name, pin):
+                    continue
+                name = data_name(pin)
+                try:
+                    context.require_payload(unit.name, name, sha256=pin.sha256, size=pin.size)
+                    context.note(unit.name, name, fallback=False)
+                except CatalogueMiss as exc:
+                    found.append(str(exc))
+        elif isinstance(block, RegisterInstall):
+            try:
+                context.unverified(unit.name, FILE_NAME)
+                context.note(unit.name, FILE_NAME, fallback=False)
+            except CatalogueMiss as exc:
+                found.append(str(exc))
+        if found:
+            misses[unit.name] = CatalogueMiss("; ".join(dict.fromkeys(found)))
+    # A unit that depends on one dropped here cannot run without it.
+    changed = True
+    while changed:
+        changed = False
+        for unit in plan.packages:
+            gone = sorted(d for d in unit.manifest.depends if d in misses)
+            if gone and unit.name not in misses:
+                misses[unit.name] = CatalogueMiss(
+                    f"depends on {', '.join(gone)}, which the Bunker cannot supply: "
+                    + "; ".join(str(misses[d]) for d in gone)
+                )
+                changed = True
+    packages: list[PlannedPackage] = []
+    deferrals = list(plan.deferrals)
+    blockers: list[Blocker] = []
+    for unit in plan.packages:
+        miss = misses.get(unit.name)
+        if miss is None:
+            packages.append(unit)
+            continue
+        try:
+            deferrals.append(catalogue_deferral(unit, miss))
+        except PlanError as exc:
+            blockers.extend(exc.blockers)
+    if blockers:
+        raise PlanError(blockers)
+    if not misses:
+        return plan
+    return _without_units(plan, set(misses), packages, deferrals)
+
+
+def _without_units(
+    plan: InstallPlan,
+    dropped: set[str],
+    packages: list[PlannedPackage],
+    deferrals: list[Deferral],
+) -> InstallPlan:
+    """*plan* with *dropped* units gone from every field that belongs to a unit.
+
+    A unit with no install steps also has no group membership, configuration
+    file, user service, file capability, third-party repository, consent gate
+    of its own or disclosure note: those would otherwise be performed for
+    software that is not being installed."""
+
+    return replace(
+        plan,
+        packages=tuple(packages),
+        deferrals=tuple(deferrals),
+        group_memberships=tuple(g for g in plan.group_memberships if g.package not in dropped),
+        file_capabilities=tuple(c for c in plan.file_capabilities if c.package not in dropped),
+        consent_gates=tuple(
+            (name, gate)
+            for name, gate in plan.consent_gates
+            if name.removeprefix("file-capabilities:") not in dropped
+        ),
+        config_files=tuple(c for c in plan.config_files if c[0] not in dropped),
+        user_services=tuple(s for s in plan.user_services if s.unit not in dropped),
+        apt_repos=tuple(r for r in plan.apt_repos if r.unit not in dropped),
+        notes=tuple(
+            n
+            for n in plan.notes
+            if not any(n.startswith((f"{name}:", f"{name} ")) for name in dropped)
+        ),
+    )
+
+
 def resolve(
     names: Sequence[str],
     *,
@@ -1286,6 +1940,7 @@ def resolve(
     java: JavaProbe | None = None,
     desktops: SessionScan | frozenset[Desktop] | None = None,
     log: TransactionLog | None = None,
+    resolution_context: ResolutionContext | None = None,
 ) -> InstallPlan:
     """Build a complete plan, or raise :class:`PlanError` listing every blocker.
 
@@ -1312,6 +1967,12 @@ def resolve(
     ``log`` is the transaction log, consulted only to attribute an installed
     vendor .deb to this engine (#63); ``None`` means no unit can be already
     installed that way, which is the conservative reading.
+
+    ``resolution_context`` is the run's :class:`~hammunition.resolution.
+    ResolutionContext`. Offline, apt is not reachable, so an apt package the
+    machine does not already have is a blocker by name rather than an
+    ``apt-get`` that would try the network (apt on the Bunker is phase 2 of
+    #381); the simulation of what is already installed stays local.
     """
     blockers: list[Blocker] = []
     deferrals: list[Deferral] = []
@@ -1561,7 +2222,12 @@ def resolve(
                             "has no package lists, so every package would resolve as unknown. "
                             "Reporting them all as unobtainable would be a confident lie"
                         ),
-                        remedy="run `sudo apt-get update`, or drop --no-refresh so this run does it first",
+                        remedy=(
+                            "run `sudo apt-get update` while the archive is reachable; an "
+                            "offline run never refreshes the lists"
+                            if resolution_context is not None and resolution_context.offline
+                            else "run `sudo apt-get update`, or drop --no-refresh so this run does it first"
+                        ),
                     )
                 )
         else:
@@ -1944,6 +2610,9 @@ def resolve(
 
     apt_sets = ((_outstanding(default_names), False), (_outstanding(opted_out_names), True))
     outstanding_apt = [p for set_packages, _ in apt_sets for p in set_packages]
+    if resolution_context is not None and resolution_context.offline:
+        blockers.extend(_offline_apt_blockers(resolved, set(outstanding_apt)))
+        blockers.extend(_offline_repo_blockers(repo_additions))
     apt_release: str | None = None
     apt_from_release: tuple[str, ...] = ()
     simulation = AptSimulation(ok=True)

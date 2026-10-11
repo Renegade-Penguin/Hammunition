@@ -40,6 +40,7 @@ import os
 import re
 import subprocess
 import urllib.error
+import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Iterable, Sequence
@@ -278,6 +279,7 @@ def read_snapshot(
     *,
     mirror: str | None,
     fetch: Callable[..., tuple[bytes, str, datetime]] | None = None,
+    offline: bool = False,
 ) -> SnapshotRead:
     """*snapshot*, from ``<mirror>/<SNAPSHOT_UNIT>/<name>`` first when a
     *mirror* is given (D-070's shape), else or on any failure there -- it
@@ -287,13 +289,22 @@ def read_snapshot(
     A mirror is trusted for speed, never for content: what it sent is parsed
     exactly as the publisher's would be, and is still marked unverified, its
     sha256 being only what was observed. Raises the publisher path's own
-    :class:`RepeaterFetchError` / :class:`RepeaterInputError`."""
+    :class:`RepeaterFetchError` / :class:`RepeaterInputError`.
+
+    *offline* never asks the publisher: a snapshot the mirror cannot give is
+    refused, naming it, and not fetched from the publisher instead. Reading a
+    snapshot from a ``file://`` export or the catalogue is #394; until then a
+    file export under *offline* is refused too."""
     from . import repeaters
     from .fetch import MirrorPath, mirror_url
 
     get = fetch or repeaters.fetch_list
     failure: str | None = None
-    if mirror:
+    if mirror and urllib.parse.urlsplit(mirror).scheme == "file":
+        # A file export is read by the Bunker transport, never by this plain
+        # HTTP fetch; asking it would raise on a scheme with no handler.
+        failure = "a file:// mirror is not asked for repeater snapshots"
+    elif mirror:
         where = mirror_url(mirror, MirrorPath(SNAPSHOT_UNIT, snapshot.name))
         try:
             body, digest, when = get(where, limit=snapshot.limit)
@@ -304,6 +315,12 @@ def read_snapshot(
             return SnapshotRead(parsed, digest, when, "mirror", where, None)
         except (repeaters.RepeaterFetchError, repeaters.RepeaterInputError) as exc:
             failure = str(exc)
+    if offline:
+        raise repeaters.RepeaterFetchError(
+            f"offline: the {snapshot.name} repeater snapshot has no Bunker route "
+            f"({failure or 'no mirror is set'}; #394), and its publisher {snapshot.url} "
+            f"is not asked under --offline"
+        )
     try:
         body, digest, when = get(snapshot.url, limit=snapshot.limit)
         try:

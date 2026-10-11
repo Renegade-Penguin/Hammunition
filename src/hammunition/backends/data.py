@@ -23,6 +23,7 @@ it whole from the log's ``install-data`` records without guessing.
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -80,7 +81,14 @@ class DataBackend:
     scratch, never the prefix. None puts it beside the fetch cache."""
     owner: str | None = None
     """The operator an installed tree is handed to (D-043); None keeps it root's."""
+    provenance: Mapping[tuple[str, str], str] | None = None
+    """Where the Bunker's catalogue vouched for an item this run (the resolution
+    context's notes, keyed ``(unit, name)``); each such fetch line says so."""
     method = "data"
+
+    def _vouched(self, unit: str, name: str) -> str:
+        note = (self.provenance or {}).get((unit, name))
+        return f" [{note}]" if note else ""
 
     def data_dir(self, manifest: PackageManifest) -> Path:
         return self.prefix / "share" / "hammunition" / "data" / manifest.name
@@ -109,7 +117,7 @@ class DataBackend:
                     kind="fetch",
                     description=(
                         f"Fetch {manifest.name} data ({human_size(artifact.size)}, "
-                        f"{block.licence}){note}"
+                        f"{block.licence}){note}{self._vouched(manifest.name, where.name)}"
                     ),
                     detail=f"{urls} (sha256 {artifact.sha256[:12]}…, {artifact.size} bytes)",
                     perform=partial(self._fetch, artifact, fetched, where, facts),
@@ -181,6 +189,7 @@ class DataBackend:
                 description=(
                     f"Fetch {manifest.name} data (about {human_size(acma.MEASURED_SIZE)}, "
                     f"{block.licence}) — UNVERIFIED: no checksum is published{note}"
+                    f"{self._vouched(manifest.name, acma.FILE_NAME)}"
                 ),
                 detail=f"{urls} ({acma.VERIFIED_BY})",
                 perform=partial(self._fetch_register, fetched, digests, where, facts),

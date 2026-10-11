@@ -4,7 +4,7 @@
 
 A profile is a named bundle of software that belongs together. Profiles
 are flat tags with overlap, never nested (D-003): `gpsd` is in both
-`station` and `navigation`, and you compose them freely. There are 20 of them, 12 in the 1.0 set and 8 that came after it. Every page below is generated from the profile's manifest, so it cannot drift from what the engine does.
+`station` and `navigation`, and you compose them freely. There are 21 of them, 13 in the 1.0 set and 8 that came after it. Every page below is generated from the profile's manifest, so it cannot drift from what the engine does.
 
 ## How to use this page
 
@@ -31,6 +31,7 @@ Units is the number of catalog entries the profile names. A target that lacks on
 | [`rf-security`](rf-security.md) | Spectrum analysis, wireless auditing and protocol inspection | 1.0 | 13 | about 300 MB, mostly Wireshark | A monitor-mode Wi-Fi adapter, an Ubertooth or Bluetooth adapter, or an SDR, depending on what you capture | a typed key fingerprint per repository, only where the target's archive lacks the unit: `kismet` | anything cellular, and everything gated in rf-research |
 | [`satellite`](satellite.md) | Tracking, working and decoding amateur and weather satellites | 1.0 | 4 | about 400 MB, double without GNU Radio | An SDR and an antenna for receiving, or a transceiver for working amateur satellites | none | NOAA APT decoders (all satellites retired 2025-11-09), FoxTelem |
 | [`sdr`](sdr.md) | Software-defined radio — receivers, GNU Radio, and the driver layer | 1.0 | 16 | about 1.5 GB, most of it GNU Radio | An SDR and an antenna | none | eleven of twelve per-device SoapySDR modules (install yours by name) |
+| [`security-keys`](security-keys.md) | Hardware signing keys and smartcard tools for your station | 1.0 | 5 | Not yet measured | A FIDO2 authenticator or PIV token to use the tools; none to install | none | PAM enablement and automatic key generation |
 | [`station`](station.md) | The floor every station stands on — rig control, time, position | 1.0 | 14 | about 125 MB | None to install it | none | per-manufacturer radio tools, loggers, anything mode-specific |
 | [`editors`](editors.md) | VS Code and VSCodium, opt-in, each behind its publisher's apt repository | post-1.0 | 2 | about 400 MB per editor | None | a typed key fingerprint per repository, only where the target's archive lacks the unit: `codium`, `code` | every other editor, extensions and settings sync |
 | [`mesh`](mesh.md) | Off-grid mesh messaging: Reticulum with NomadNet and LXMF, the Meshtastic clients and the Meshtastic node daemon | post-1.0 | 6 | about 70 MB of venvs, plus three apt packages (152 more with meshtasticd on a bare machine) | None for Reticulum on a local network | a typed key fingerprint per repository, only where the target's archive lacks the unit: `meshtasticd` | Sideband, MeshChat, MeshCore, TAK, any Reticulum configuration |
@@ -71,6 +72,7 @@ Find what you want to do. The profiles are listed in the order to install them, 
 | Send and receive pictures (SSTV) or weather faxes | [`digital-modes`](digital-modes.md) |
 | Send email by radio (Winlink) or run packet | [`station`](station.md), [`packet`](packet.md) |
 | Set up a serial console, git and the tools every device problem starts with | [`workstation`](workstation.md) |
+| Sign and verify my Bunker's catalogue with a hardware key | [`security-keys`](security-keys.md) |
 | Study cellular or transmit-capable RF research tooling | [`rf-research`](rf-research.md) |
 | Study RFID and NFC cards | [`rfid`](rfid.md) |
 | Study wireless and Bluetooth security | [`rf-security`](rf-security.md) |

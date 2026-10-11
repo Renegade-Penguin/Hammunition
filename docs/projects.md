@@ -8,7 +8,7 @@ in their spare time — and the catalog only describes how to install it
 well. This page links each one to its own home, so the credit and the
 support questions go where they belong.
 
-**327 programs and packages** from the catalog, laid out the way the
+**332 programs and packages** from the catalog, laid out the way the
 desktop menu is. Each appears once, under its first category; its page in
 the [package reference](packages/index.md) lists the others, what it
 needs before it works, its known problems and where to get help with it.
@@ -579,12 +579,17 @@ Wi-Fi, Bluetooth, cellular, RFID, sub-GHz, packet capture, and consent-gated res
 
 | Project | What it is | Its home |
 |---|---|---|
+| [fido2-tools](packages/fido2-tools.md) | FIDO2 authenticator discovery and management tools | [github.com/Yubico/libfido2](https://github.com/Yubico/libfido2) |
 | [libfreefare-bin](packages/libfreefare-bin.md) | Tools for MIFARE DESFire, Ultralight and Classic over libnfc | [github.com/nfc-tools/libfreefare](https://github.com/nfc-tools/libfreefare) |
 | [libnfc-bin](packages/libnfc-bin.md) | Command-line tools for PN53x-based NFC readers | [github.com/nfc-tools/libnfc](https://github.com/nfc-tools/libnfc) |
+| [libpam-u2f](packages/libpam-u2f.md) | U2F PAM module installed without enabling token login | [github.com/Yubico/pam-u2f](https://github.com/Yubico/pam-u2f) |
 | [mfcuk](packages/mfcuk.md) | MIFARE Classic key recovery with no known key — the slow path | [github.com/nfc-tools/mfcuk](https://github.com/nfc-tools/mfcuk) |
 | [mfoc](packages/mfoc.md) | Key recovery for MIFARE Classic cards with at least one known key | [github.com/nfc-tools/mfoc](https://github.com/nfc-tools/mfoc) |
+| [opensc](packages/opensc.md) | Smartcard and PKCS#11 tools for hardware signing | [github.com/OpenSC/OpenSC](https://github.com/OpenSC/OpenSC) |
 | [pcsc-tools](packages/pcsc-tools.md) | Smartcard reader diagnostics — is the reader even working? | [github.com/LudovicRousseau/pcsc-tools](https://github.com/LudovicRousseau/pcsc-tools) |
+| [pcscd](packages/pcscd.md) | PC/SC smartcard daemon for PIV readers | [pcsclite.apdu.fr](https://pcsclite.apdu.fr/) |
 | [proxmark3](packages/proxmark3.md) | Client and firmware tooling for the Proxmark3 RFID and NFC research device | [github.com/RfidResearchGroup/proxmark3](https://github.com/RfidResearchGroup/proxmark3) |
+| [yubikey-manager](packages/yubikey-manager.md) | YubiKey FIDO2 and PIV management utility | [github.com/Yubico/yubikey-manager](https://github.com/Yubico/yubikey-manager) |
 
 ### Sub-GHz, ISM & Remotes
 

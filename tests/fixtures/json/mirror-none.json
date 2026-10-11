@@ -1,0 +1,15 @@
+{
+  "schema": "hammunition/1",
+  "kind": "mirror",
+  "engine": "<engine>",
+  "url": null,
+  "name": null,
+  "mode": null,
+  "enrolment_id": null,
+  "accepted_serial": null,
+  "generated": null,
+  "age_days": null,
+  "require_hardware": false,
+  "keys": [],
+  "warnings": []
+}

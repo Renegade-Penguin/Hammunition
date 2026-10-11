@@ -68,6 +68,7 @@ from .copernicus import (
     load_pins,
     load_tile_list,
     parse_poly,
+    recorded_tile,
     resolve_tile,
     select,
     squares_touching,
@@ -77,6 +78,7 @@ from .geofabrik import BASE, GeofabrikError, Probe, RegionFile
 from .manifest.schema import BinaryInstall, DemTilesInstall, DerivedDataInstall, TopoQuadsInstall
 from .plan import InstallPlan, PlannedPackage
 from .progress import run_checks
+from .resolution import CatalogueMiss, ResolutionContext
 from .retry import OnOutage, Outages, PublisherUnavailable, hint_for, reporter_for
 from .topo_bound import ALL, TopoBound
 from .usgs3dep import TileRow, check_tile, tile_url
@@ -90,15 +92,52 @@ def poly_url(region: str) -> str:
 
 
 def region_tiles(
-    region: str, slug: str, *, installed: Path, tile_list: frozenset[str], probe: Probe
+    region: str,
+    slug: str,
+    *,
+    installed: Path | None,
+    tile_list: frozenset[str],
+    probe: Probe,
+    context: ResolutionContext | None = None,
 ) -> RegionTiles:
-    """*region*'s tiles: its record when there is one, else its outline."""
-    recorded = read_record(installed / f"{slug}{TILES}", region, slug)
-    if recorded is not None:
+    """*region*'s tiles: its record when there is one, else its outline.
+
+    *installed* is ``None`` for a stateless listing (:func:`hammunition.artifacts.list_inputs`):
+    no record is read, and the outline is always asked for."""
+    recorded = (
+        read_record(installed / f"{slug}{TILES}", region, slug) if installed is not None else None
+    )
+    if (
+        recorded is not None
+        and recorded.bound == "all"
+        and (context is None or all(n in tile_list for n in recorded.tiles))
+    ):
         return recorded
-    outer, holes = parse_poly(probe.text(poly_url(region)))
-    tiles, unpublished = select(squares_touching(outer, holes), tile_list)
-    return RegionTiles(region, slug, tiles, unpublished)
+
+    def derive(text: str) -> RegionTiles:
+        outer, holes = parse_poly(text)
+        tiles, unpublished = select(squares_touching(outer, holes), tile_list)
+        return RegionTiles(region, slug, tiles, unpublished)
+
+    def fallback() -> RegionTiles:
+        assert context is not None
+        selected = context.selection("tile-selection", region, read_record)
+        if (
+            selected is not None
+            and selected.bound == "all"
+            and all(n in tile_list for n in selected.tiles)
+        ):
+            return RegionTiles(region, slug, selected.tiles, selected.unpublished)
+        return derive(context.outline(region, probe, base=BASE))
+
+    def online() -> RegionTiles:
+        return derive(probe.text(poly_url(region)))
+
+    return (
+        context.choose("inputs", f"tile-selection/{region}", online, fallback)
+        if context is not None
+        else online()
+    )
 
 
 def resolve_terrain(
@@ -111,12 +150,22 @@ def resolve_terrain(
     tile_probe: TileProbe,
     on_outage: OnOutage | None = None,
     checks: PublisherChecks | None = None,
+    context: ResolutionContext | None = None,
+    unit: str | None = None,
 ) -> DemResolution:
     """*regions* as ``(region, slug)`` pairs -- this run's and the kept ones --
     resolved to the tiles they need and how each is fetched. A pair named
     twice is resolved once, so its outline is never asked for twice. A
     publisher that did not answer after the retries goes to *on_outage* and
-    that region or tile is left out (#200); without it, it is refused."""
+    that region or tile is left out (#200); without it, it is refused.
+
+    With a *context* the tiles come from the Bunker's records when the bucket
+    cannot be asked, and *unit* (the manifest's name, the catalogue key) is
+    required. A tile the Bunker cannot answer for, while a Bunker is verified,
+    defers the whole selection rather than recording fewer tiles than the
+    regions want."""
+    if context is not None and unit is None:
+        raise ValueError("resolve_terrain needs the unit name when given a context")
     refused: list[str] = []
     entries: list[RegionTiles] = []
     seen: set[tuple[str, str]] = set()
@@ -127,14 +176,23 @@ def resolve_terrain(
         try:
             entries.append(
                 region_tiles(
-                    region, slug, installed=installed, tile_list=tile_list, probe=region_probe
+                    region,
+                    slug,
+                    installed=installed,
+                    tile_list=tile_list,
+                    probe=region_probe,
+                    context=context,
                 )
             )
         except PublisherUnavailable as exc:
             if on_outage is None:
                 refused.append(f"  {region}: its outline could not be read: {exc}")
             else:
+                if context is not None:
+                    raise CatalogueMiss(f"{region}: no complete selection: {exc}") from exc
                 on_outage(f"{region} (its outline)", exc)
+        except CatalogueMiss:
+            raise
         except (GeofabrikError, CopernicusError, OSError) as exc:
             refused.append(f"  {region}: its outline could not be read: {exc}")
     wanted = sorted({name for entry in entries for name in entry.tiles})
@@ -142,7 +200,7 @@ def resolve_terrain(
     held = set(current)
     todo = [name for name in wanted if name not in held]
 
-    def check(name: str) -> TileFile:
+    def check_online(name: str) -> TileFile:
         tile = resolve_tile(name, pins=pins, probe=tile_probe)
         if tile.sha256 is not None:
             status, _, _ = tile_probe.head(tile.url)
@@ -150,18 +208,34 @@ def resolve_terrain(
                 raise CopernicusError(f"{tile.url} answered HTTP {status}, not 200")
         return tile
 
+    def check(name: str) -> TileFile:
+        # One choose around the resolve and the pinned reachability HEAD, so an
+        # outage in either is answered by the same single catalogue lookup.
+        if context is None:
+            return check_online(name)
+        assert unit is not None
+        return context.choose(
+            unit,
+            name,
+            lambda: check_online(name),
+            lambda: recorded_tile(name, unit=unit, pins=pins, context=context),
+        )
+
     # #197: an installed tile the log attributes is not asked again until the
     # attribution is a week old; a failed re-check is a note, never a refusal.
-    recheck_installed(
-        checks,
-        installed.name,
-        current,
-        name=lambda tile: tile,
-        path=lambda tile: installed / f"{tile}{TIF}",
-        check=check,
-        label="installed terrain tiles against the Copernicus DEM bucket",
-        probe=tile_probe,
-    )
+    # Offline the bucket is never asked; online a failed re-check stays a note
+    # (never the Bunker's answer, which says nothing of the installed file).
+    if context is None or not context.offline:
+        recheck_installed(
+            checks,
+            installed.name,
+            current,
+            name=lambda tile: tile,
+            path=lambda tile: installed / f"{tile}{TIF}",
+            check=check_online,
+            label="installed terrain tiles against the Copernicus DEM bucket",
+            probe=tile_probe,
+        )
 
     fetch: list[TileFile] = []
     deferred: list[str] = []
@@ -170,6 +244,8 @@ def resolve_terrain(
         try:
             tile = outcome.get()
         except PublisherUnavailable as exc:
+            if context is not None and context.verified is not None:
+                raise CatalogueMiss(f"{name}: no complete tile set: {exc}") from exc
             if on_outage is None:
                 refused.append(f"  {name}: {exc}")
             else:
@@ -193,22 +269,126 @@ def resolve_terrain(
     )
 
 
+def region_bare_earth(
+    region: str,
+    slug: str,
+    *,
+    installed: Path | None,
+    tiles: Mapping[str, TileRow],
+    region_probe: Probe,
+    bound: TopoBound = ALL,
+    context: ResolutionContext | None = None,
+) -> RegionTiles:
+    """Select 3DEP tiles using current records, verified inputs, or an outline.
+
+    *installed* is ``None`` for a stateless listing: no record is read."""
+    if bound.mode == "none" or not bound.wants_region(region):
+        return RegionTiles(region, slug, (), 0, bound.token)
+    recorded = (
+        read_record(installed / f"{slug}{TILES}", region, slug) if installed is not None else None
+    )
+    if (
+        recorded is not None
+        and recorded.bound == bound.token
+        and (context is None or all(n in tiles for n in recorded.tiles))
+    ):
+        return recorded
+
+    def derive(text: str) -> RegionTiles:
+        outer, holes = parse_poly(text)
+        names = {threedep_name(square) for square in squares_touching(outer, holes)}
+        found = tuple(sorted(name for name in names if name in tiles))
+        unpublished = len(names) - len(found)
+        found = tuple(name for name in found if bound.keeps(tile_box(name)))
+        if not found and unpublished and bound.token != "all":
+            unpublished = 0
+        return RegionTiles(region, slug, found, unpublished, bound.token)
+
+    def fallback() -> RegionTiles:
+        assert context is not None
+        selected = context.selection("dem3dep-selection", region, read_record)
+        if (
+            selected is not None
+            and selected.bound in (bound.token, "all")
+            and all(n in tiles for n in selected.tiles)
+        ):
+            narrowed = tuple(n for n in selected.tiles if bound.keeps(tile_box(n)))
+            unpublished = selected.unpublished
+            if not narrowed and unpublished and selected.bound == "all" and bound.token != "all":
+                unpublished = 0
+            return RegionTiles(
+                region,
+                slug,
+                narrowed,
+                unpublished,
+                bound.token,
+            )
+        return derive(context.outline(region, region_probe, base=BASE))
+
+    def online() -> RegionTiles:
+        return derive(region_probe.text(poly_url(region)))
+
+    return (
+        context.choose("inputs", f"dem3dep-selection/{region}", online, fallback)
+        if context is not None
+        else online()
+    )
+
+
+def finish_selection(
+    entries: list[RegionTiles],
+    refused: list[str],
+    *,
+    selection_only: bool,
+    installed: Path | None,
+    tile_probe: TileProbe | None,
+) -> DemResolution | None:
+    """After the selection loop: with *selection_only*, the selection alone is
+    the answer (:func:`hammunition.artifacts.list_inputs` reads no installed
+    file and checks no tile against the bucket); otherwise an install caller
+    must have given a real *installed* directory and *tile_probe*, and
+    ``None`` tells the caller to continue into the installed-file and
+    publisher checks below."""
+    if selection_only:
+        if refused:
+            raise CopernicusError("\n".join(refused))
+        return DemResolution(regions=tuple(entries))
+    if installed is None or tile_probe is None:
+        raise CopernicusError("terrain downloads require an installed directory and tile probe")
+    return None
+
+
 def resolve_bare_earth(
     regions: Sequence[tuple[str, str]],
     *,
-    installed: Path,
+    installed: Path | None,
     tiles: Mapping[str, TileRow],
     region_probe: Probe,
-    tile_probe: TileProbe,
+    tile_probe: TileProbe | None,
     on_outage: OnOutage | None = None,
     checks: PublisherChecks | None = None,
+    context: ResolutionContext | None = None,
     bound: TopoBound = ALL,
+    unit: str | None = None,
+    selection_only: bool = False,
 ) -> DemResolution:
     """*regions* resolved to their USGS 3DEP tiles, under *bound* (issue #232) (D-068, amended
     2026-10-01): each region's record, else its outline's squares named by
     their north-west corner and kept where the carried list has a tile; then
     every tile not installed HEAD-checked against the list's size and ETag.
-    Every refusal is named together, as for Copernicus."""
+    Every refusal is named together, as for Copernicus.
+
+    With a *context* a tile the bucket cannot be asked about is answered by
+    the Bunker's record, compared with the carried list; *unit* (the manifest's
+    name, the catalogue key) is then required. A tile the Bunker cannot answer
+    for, while a Bunker is verified, defers the whole selection.
+
+    With *selection_only* (Task 16), the function returns right after the
+    selection loop below, before anything installed is read and before the
+    bucket is asked about a single tile: *installed* and *tile_probe* may
+    both be ``None``."""
+    if context is not None and unit is None:
+        raise ValueError("resolve_bare_earth needs the unit name when given a context")
     refused: list[str] = []
     entries: list[RegionTiles] = []
     seen: set[tuple[str, str]] = set()
@@ -218,29 +398,35 @@ def resolve_bare_earth(
         seen.add((region, slug))
         if bound.mode == "none" or not bound.wants_region(region):
             continue
-        recorded = read_record(installed / f"{slug}{TILES}", region, slug)
-        if recorded is not None and recorded.bound == bound.token:
-            entries.append(recorded)
-            continue
         try:
-            outer, holes = parse_poly(region_probe.text(poly_url(region)))
+            entries.append(
+                region_bare_earth(
+                    region,
+                    slug,
+                    installed=installed,
+                    tiles=tiles,
+                    region_probe=region_probe,
+                    bound=bound,
+                    context=context,
+                )
+            )
         except PublisherUnavailable as exc:
             if on_outage is None:
                 refused.append(f"  {region}: its outline could not be read: {exc}")
             else:
+                if context is not None:
+                    raise CatalogueMiss(f"{region}: no complete selection: {exc}") from exc
                 on_outage(f"{region} (its outline)", exc)
-            continue
+        except CatalogueMiss:
+            raise
         except (GeofabrikError, CopernicusError, OSError) as exc:
             refused.append(f"  {region}: its outline could not be read: {exc}")
-            continue
-        names = {threedep_name(square) for square in squares_touching(outer, holes)}
-        found = tuple(sorted(name for name in names if name in tiles))
-        unpublished = len(names) - len(found)
-        found = tuple(name for name in found if bound.keeps(tile_box(name)))
-        if not found and unpublished and bound.token != "all":
-            # Left out by the bound, not unpublished: never "no terrain here".
-            unpublished = 0
-        entries.append(RegionTiles(region, slug, found, unpublished, bound.token))
+    early = finish_selection(
+        entries, refused, selection_only=selection_only, installed=installed, tile_probe=tile_probe
+    )
+    if early is not None:
+        return early
+    assert installed is not None and tile_probe is not None  # finish_selection guaranteed this
     wanted = sorted({name for entry in entries for name in entry.tiles})
     current = [name for name in wanted if (installed / f"{name}{TIF}").is_file()]
     held = set(current)
@@ -252,29 +438,37 @@ def resolve_bare_earth(
         "scripts/gen_3dep_tiles.py --fetch regenerates it"
     )
 
-    def check(name: str) -> TileRow:
+    def check_with(name: str, ctx: ResolutionContext | None) -> TileRow:
         row = tiles.get(name)
         if row is None:
             raise CopernicusError(absent)
-        check_tile(row, tile_probe)
+        check_tile(row, tile_probe, context=ctx, unit=unit)
         return row
 
-    recheck_installed(
-        checks,
-        installed.name,
-        current,
-        name=lambda tile: tile,
-        path=lambda tile: installed / f"{tile}{TIF}",
-        check=check,
-        label="installed 3DEP terrain tiles against the USGS bucket",
-        probe=tile_probe,
-    )
+    def check(name: str) -> TileRow:
+        return check_with(name, context)
+
+    # Offline the bucket is never asked; online a failed re-check stays a note
+    # (never the Bunker's answer, which says nothing of the installed file).
+    if context is None or not context.offline:
+        recheck_installed(
+            checks,
+            installed.name,
+            current,
+            name=lambda tile: tile,
+            path=lambda tile: installed / f"{tile}{TIF}",
+            check=lambda name: check_with(name, None),
+            label="installed 3DEP terrain tiles against the USGS bucket",
+            probe=tile_probe,
+        )
 
     outcomes = run_checks(todo, check, label="3DEP terrain tiles against the USGS bucket")
     for name, outcome in zip(todo, outcomes, strict=True):
         try:
             row = outcome.get()
         except PublisherUnavailable as exc:
+            if context is not None and context.verified is not None:
+                raise CatalogueMiss(f"{name}: no complete tile set: {exc}") from exc
             if on_outage is None:
                 refused.append(f"  {name}: {exc}")
             else:
@@ -350,6 +544,7 @@ def resolve_station_3dep(
     tile_probe: TileProbe,
     outages: Outages | None = None,
     checks: PublisherChecks | None = None,
+    context: ResolutionContext | None = None,
     bound: TopoBound | None = ALL,
 ) -> tuple[DemResolution, tuple[str, ...]]:
     """The plan's 3DEP tiles and notes (D-068, amended 2026-10-01). Nothing
@@ -375,7 +570,9 @@ def resolve_station_3dep(
         tile_probe=tile_probe,
         on_outage=reporter_for(outages, unit),
         checks=checks,
+        context=context,
         bound=bound,
+        unit=unit.name,
     )
     return resolution, ()
 
@@ -425,6 +622,7 @@ def resolve_station_terrain(
     tile_probe: TileProbe,
     outages: Outages | None = None,
     checks: PublisherChecks | None = None,
+    context: ResolutionContext | None = None,
 ) -> DemResolution:
     """The plan's terrain, or an empty resolution when it holds no dem-tiles unit.
 
@@ -462,6 +660,8 @@ def resolve_station_terrain(
         tile_probe=tile_probe,
         on_outage=reporter_for(outages, unit),
         checks=checks,
+        context=context,
+        unit=unit.name,
     )
 
 

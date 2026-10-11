@@ -272,7 +272,37 @@ def test_the_plan_can_print_every_path_before_anything_is_fetched(tmp_path: Path
     rendered = "\n".join(s.display(euid=1000) for s in steps)
     layout = backend.layout(manifest, manifest.install[0].install)  # type: ignore[arg-type]
     assert str(layout.src) in rendered
-    assert "sha256 verified" in rendered
+    # The shared payload step (Task 13) names the artifact and its URL; the
+    # sha256 check is the pin's, stated for the mirror route in the step's suffix.
+    assert "https://example.invalid/thing-1.0.tar.gz" in rendered
+    assert steps[0].description == "Fetch thing source archive"
+
+
+def test_the_fetch_step_states_that_the_sha256_is_verified(tmp_path: Path) -> None:
+    """The shared payload step says so in its outcome (and the plan's mirror
+    suffix says which digest is checked), whichever source answered."""
+    import hashlib
+
+    from hammunition.fetch import Fetcher as RealFetcher
+    from test_fetch_mirror import Routes
+
+    body = b"a source tarball"
+    url = "https://example.invalid/thing-1.0.tar.gz"
+    manifest = _manifest(
+        source={"url": url, "sha256": hashlib.sha256(body).hexdigest()},
+    )
+    backend = SourceBackend(
+        RealFetcher(tmp_path / "cache", transport=Routes({url: body})),
+        build_root=tmp_path / "build",
+        jobs=4,
+    )
+    fetch = backend.steps(manifest, manifest.install[0])[0]
+    assert isinstance(fetch, Action) and fetch.kind == "fetch"
+    assert "sha256 verified" in fetch.perform()
+    # a second run is a cache hit, re-verified and said so
+    again = backend.steps(manifest, manifest.install[0])[0]
+    assert isinstance(again, Action)
+    assert "cached" in again.perform() and "sha256 verified" in again.perform()
 
 
 def test_compiler_flags_reach_the_compiler(tmp_path: Path) -> None:

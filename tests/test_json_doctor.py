@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from hammunition import doctor
+from hammunition.backends.base import CommandResult
 from hammunition.distro import Target
 from hammunition.doctor import Check
 from hammunition.station import Station, save_station
@@ -56,6 +57,18 @@ CHECKS = {
 }
 
 
+def _no_security_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A12: these tests are not about security keys, so every tool the gather
+    path asks is an explicit, inert miss rather than the real host's."""
+    monkeypatch.setattr(
+        cli,
+        "_security_key_probe",
+        lambda argv: CommandResult(
+            argv=argv, returncode=127, stdout="", stderr="diagnostic tool unavailable in fixture"
+        ),
+    )
+
+
 def _run(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -64,6 +77,7 @@ def _run(
 ) -> tuple[int, str]:
     monkeypatch.setattr(Target, "detect", classmethod(lambda cls: TARGET))
     monkeypatch.setattr(doctor, "run_checks", lambda **kwargs: checks)
+    _no_security_keys(monkeypatch)
     rc = cli.main(["--catalog", str(FIXTURE_CATALOG), "doctor", *flags])
     return rc, capsys.readouterr().out
 
@@ -105,6 +119,7 @@ def test_the_station_values_never_reach_the_document(
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     monkeypatch.delenv("SUDO_USER", raising=False)
+    _no_security_keys(monkeypatch)
     save_station(
         Station(
             callsign="N0TST",
@@ -133,6 +148,7 @@ def test_the_desktops_check_reaches_the_document_with_no_code_of_its_own(
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     monkeypatch.setenv("XDG_CURRENT_DESKTOP", "XFCE")
     monkeypatch.delenv("SUDO_USER", raising=False)
+    _no_security_keys(monkeypatch)
     monkeypatch.setattr(
         cli,
         "scan_sessions",
@@ -173,6 +189,7 @@ def test_a_fresh_install_with_local_bin_off_path_is_not_sent_back_to_bootstrap(
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     monkeypatch.delenv("SUDO_USER", raising=False)
+    _no_security_keys(monkeypatch)
     cli.main(["--catalog", str(FIXTURE_CATALOG), "doctor"])
     text = capsys.readouterr().out
     cli.main(["--catalog", str(FIXTURE_CATALOG), "doctor", "--json"])

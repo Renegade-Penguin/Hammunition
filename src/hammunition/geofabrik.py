@@ -28,6 +28,8 @@ from typing import Protocol
 
 import yaml
 
+from hammunition.resolution import CatalogueMiss, ResolutionContext
+
 BASE = "https://download.geofabrik.de"
 PINNED = "sha256, pinned by Hammunition"
 UNPINNED = "MD5 from Geofabrik only; not pinned"
@@ -178,7 +180,7 @@ def _md5(probe: Probe, url: str) -> str:
     return match.group(1)
 
 
-def resolve(
+def _resolve_online(
     region: str,
     freshness: str,
     *,
@@ -219,6 +221,80 @@ def resolve(
         f"no {freshness} extract for {region!r}: tried "
         + ", ".join(f"{region}-{s}.osm.pbf" for s in candidates)
         + ". Check the region with `hammunition maps regions`, and the machine's clock."
+    )
+
+
+def recorded_region(
+    region: str,
+    freshness: str,
+    *,
+    today: date,
+    pins: Mapping[tuple[str, str], Pin],
+    context: ResolutionContext,
+) -> RegionFile:
+    if freshness != "latest":
+        first = snapshot_for(freshness, today)
+        for snapshot in (first, _previous(freshness, first)):
+            pin = pins.get((region, snapshot))
+            if pin is not None:
+                context.require_payload("osm-regions", region, sha256=pin.sha256, size=pin.size)
+                return RegionFile(
+                    region, snapshot, _url(region, snapshot), pin.size, pin.sha256, None
+                )
+    row = context.entry("osm-regions", region)
+    match = re.fullmatch(
+        re.escape(region.rsplit("/", 1)[-1]) + r"-([0-9]{6})\.osm\.pbf", row.publisher_name or ""
+    )
+    if match is None or row.publisher_size is None or row.publisher_size <= 0:
+        raise CatalogueMiss(
+            f"osm-regions/{region}: publisher_name/publisher_size do not name a dated extract"
+        )
+    snapshot = match.group(1)
+    if freshness != "latest":
+        first = snapshot_for(freshness, today)
+        if snapshot not in (first, _previous(freshness, first)):
+            raise CatalogueMiss(f"osm-regions/{region}: Bunker has no {freshness} candidate")
+    url = _url(region, snapshot)
+    if row.publisher_url != url or row.size != row.publisher_size:
+        raise CatalogueMiss(f"osm-regions/{region}: publisher URL/size disagree with dated name")
+    pin = pins.get((region, snapshot))
+    if pin is not None:
+        context.require_payload("osm-regions", region, sha256=pin.sha256, size=pin.size)
+        return RegionFile(region, snapshot, url, pin.size, pin.sha256, None)
+    if (
+        row.publisher_check not in ("md5", "md5-publisher")
+        or re.fullmatch(r"[0-9a-f]{32}", row.publisher_digest or "") is None
+    ):
+        raise CatalogueMiss(f"osm-regions/{region}: publisher_digest is not MD5")
+    context.require_payload(
+        "osm-regions",
+        region,
+        sha256=row.sha256,
+        size=row.publisher_size,
+        publisher_digest=row.publisher_digest,
+    )
+    return RegionFile(region, snapshot, url, row.publisher_size, None, row.publisher_digest)
+
+
+def resolve(
+    region: str,
+    freshness: str,
+    *,
+    today: date,
+    pins: Mapping[tuple[str, str], Pin],
+    probe: Probe,
+    context: ResolutionContext | None = None,
+) -> RegionFile:
+    def online() -> RegionFile:
+        return _resolve_online(region, freshness, today=today, pins=pins, probe=probe)
+
+    if context is None:
+        return online()
+    return context.choose(
+        "osm-regions",
+        region,
+        online,
+        lambda: recorded_region(region, freshness, today=today, pins=pins, context=context),
     )
 
 

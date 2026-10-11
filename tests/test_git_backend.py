@@ -15,12 +15,16 @@ So most of what follows is about the check, not the clone.
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 from pydantic import ValidationError
+
+from bunker_fixtures import artifact as catalogue_artifact
+from bunker_fixtures import make_context
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
@@ -32,8 +36,13 @@ from hammunition.backends import (  # noqa: E402
     CommandResult,
     GitBackend,
     RecordingRunner,
+    SubprocessRunner,
 )
+from hammunition.fetch import Fetcher, MirrorPath, mirror_url  # noqa: E402
+from hammunition.gitbundles import bundle_name  # noqa: E402
 from hammunition.manifest.schema import ManifestError, PackageManifest  # noqa: E402
+from hammunition.resolution import CatalogueMiss  # noqa: E402
+from test_fetch_mirror import Routes  # noqa: E402
 
 SHA = "36ea9a143422f5b374371461667ff53fb9387300"
 OTHER_SHA = "0" * 40
@@ -266,3 +275,210 @@ def test_git_never_prompts_on_a_terminal(tmp_path: Path) -> None:
     for step in steps:
         if isinstance(step, Command) and step.argv[0] == "git":
             assert step.env.get("GIT_TERMINAL_PROMPT") == "0", step.argv
+
+
+# ---------------------------------------------------------------------------
+# The mirrored bundle route (D-070, #381 Task 15): a Bunker-enrolled run
+# tries the verified bundle before (or instead of) a network clone. Real git
+# against real, local, temporary repositories throughout -- the plain-clone
+# tests above never set `fetcher`/`context` at all, which is exactly what
+# keeps every one of them running the unchanged path.
+# ---------------------------------------------------------------------------
+
+
+def _git(repo: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def _repository(tmp_path: Path, name: str) -> tuple[Path, str]:
+    repo = tmp_path / name
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.name", "Fixture")
+    _git(repo, "config", "user.email", "fixture@example.invalid")
+    (repo / "file").write_text(name)
+    _git(repo, "add", "file")
+    _git(repo, "-c", "commit.gpgsign=false", "commit", "-qm", "fixture")
+    return repo, _git(repo, "rev-parse", "HEAD")
+
+
+def _bundle_bytes(repo: Path, tmp_path: Path, label: str) -> bytes:
+    path = tmp_path / f"{label}.bundle"
+    _git(repo, "bundle", "create", str(path), "--all")
+    return path.read_bytes()
+
+
+def _bundle_backend(
+    tmp_path: Path,
+    *,
+    offline: bool,
+    rows: list[dict[str, Any]],
+    routes: Routes,
+    with_fetcher: bool = True,
+) -> GitBackend:
+    context = make_context(tmp_path / "ctx", rows, offline=offline)
+    fetcher = (
+        Fetcher(
+            tmp_path / "cache",
+            mirror="http://bunker.invalid",
+            mirror_transport=routes,
+            offline=offline,
+        )
+        if with_fetcher
+        else None
+    )
+    return GitBackend(
+        runner=SubprocessRunner(),
+        build_root=tmp_path / "build",
+        prefix=Path("/usr/local"),
+        jobs=2,
+        fetcher=fetcher,
+        context=context,
+    )
+
+
+def test_backend_uses_the_bundle_route_when_the_bunker_lists_the_pin(tmp_path: Path) -> None:
+    repo, commit = _repository(tmp_path, "upstream")
+    _git(repo, "tag", "v1.0", commit)
+    body = _bundle_bytes(repo, tmp_path, "upstream")
+    name = bundle_name("thing", commit)
+    route = mirror_url("http://bunker.invalid", MirrorPath("git-bundles", name))
+    routes = Routes({route: body})
+    backend = _bundle_backend(
+        tmp_path, offline=False, rows=[catalogue_artifact("git-bundles", name, body)], routes=routes
+    )
+    manifest = _manifest(ref="v1.0", commit=commit)
+    steps = backend.steps(manifest, manifest.install[0])
+    kinds = [s.kind for s in steps if isinstance(s, Action)]
+    assert "checkout" in kinds
+    # Never built an `init`/`remote`/`fetch` Command at all in this mode.
+    assert not [s for s in steps if isinstance(s, Command) and s.argv[0] == "git"]
+    [prepare] = [s for s in steps if isinstance(s, Action) and s.kind == "prepare"]
+    prepare.perform()
+    [checkout] = [s for s in steps if isinstance(s, Action) and s.kind == "checkout"]
+    outcome = checkout.perform()
+    assert commit in outcome
+    assert routes.requested == [route]
+
+
+def test_backend_falls_back_to_a_network_clone_when_the_bundle_route_fails_online(
+    tmp_path: Path,
+) -> None:
+    """The bundle's own sha256 matches (so transport "passed"), but it is not
+    a valid bundle at all; online, this is a mirror failure, not a refusal --
+    the fallback must actually run, not merely exist."""
+    repo, commit = _repository(tmp_path, "upstream")
+    body = bytearray(_bundle_bytes(repo, tmp_path, "upstream"))
+    offset = bytes(body).find(b"PACK") + 40
+    body[offset] ^= 0xFF
+    body[offset + 1] ^= 0xFF
+    name = bundle_name("thing", commit)
+    route = mirror_url("http://bunker.invalid", MirrorPath("git-bundles", name))
+    routes = Routes({route: bytes(body)})
+    backend = _bundle_backend(
+        tmp_path,
+        offline=False,
+        rows=[catalogue_artifact("git-bundles", name, bytes(body))],
+        routes=routes,
+    )
+    manifest = _manifest(ref="v1.0", commit=commit)
+    steps = backend.steps(manifest, manifest.install[0])
+    [prepare] = [s for s in steps if isinstance(s, Action) and s.kind == "prepare"]
+    prepare.perform()
+    [checkout] = [s for s in steps if isinstance(s, Action) and s.kind == "checkout"]
+    with pytest.raises(BackendError) as caught:
+        checkout.perform()
+    # The failure that escaped is the *fallback's* own (a real DNS failure
+    # against the reserved, never-resolving example.invalid), not the
+    # bundle route's -- proof the fallback actually ran rather than the
+    # first failure simply propagating unchanged.
+    assert "git bundle" not in str(caught.value)
+    assert "Fetch thing at v1.0" in str(caught.value)
+
+
+def test_backend_checks_the_pin_before_recreating_a_moved_tag_or_touching_submodules(
+    tmp_path: Path,
+) -> None:
+    """A Codex Daybreak finding (#381 Task 15): the network fallback is one
+    function, not separate steps, so it has to check the pin itself before
+    recreating a tag or fetching a single submodule from the network --
+    otherwise a re-cut tag whose publisher also serves a hostile submodule
+    would have it fetched before the mismatch was ever noticed, with the
+    separate verify-pin Action (next in the plan) catching it only too late."""
+    upstream, old_commit = _repository(tmp_path, "upstream")
+    _git(upstream, "-c", "tag.gpgSign=false", "tag", "v1.0", old_commit)
+    (upstream / "file").write_text("moved")
+    _git(upstream, "add", "file")
+    _git(upstream, "-c", "commit.gpgsign=false", "commit", "-qm", "moved")
+    # A submodule the fallback must never reach: `submodule update` against
+    # this URL would fail loudly (DNS), which is exactly how this test tells
+    # the two failure modes apart.
+    (upstream / ".gitmodules").write_text(
+        '[submodule "child"]\n\tpath = child\n\turl = https://example.invalid/never-reached\n'
+    )
+    _git(upstream, "add", ".gitmodules")
+    _git(upstream, "-c", "commit.gpgsign=false", "commit", "-qm", "add a submodule entry")
+    _git(upstream, "-c", "tag.gpgSign=false", "tag", "-f", "v1.0", "HEAD")
+
+    body = bytearray(_bundle_bytes(upstream, tmp_path, "upstream"))
+    offset = bytes(body).find(b"PACK") + 40
+    body[offset] ^= 0xFF
+    body[offset + 1] ^= 0xFF
+    name = bundle_name("thing", old_commit)
+    route = mirror_url("http://bunker.invalid", MirrorPath("git-bundles", name))
+    routes = Routes({route: bytes(body)})
+    backend = _bundle_backend(
+        tmp_path,
+        offline=False,
+        rows=[catalogue_artifact("git-bundles", name, bytes(body))],
+        routes=routes,
+    )
+    manifest = _manifest(repo=str(upstream), ref="v1.0", commit=old_commit, submodules=True)
+    steps = backend.steps(manifest, manifest.install[0])
+    [prepare] = [s for s in steps if isinstance(s, Action) and s.kind == "prepare"]
+    prepare.perform()
+    [checkout] = [s for s in steps if isinstance(s, Action) and s.kind == "checkout"]
+    with pytest.raises(BackendError, match=r"tag v1\.0 no longer resolves") as caught:
+        checkout.perform()
+    # Not the submodule's own DNS failure: the pin check stopped the fallback
+    # before `submodule update` ever ran.
+    assert "never-reached" not in str(caught.value)
+    src = tmp_path / "build" / "thing-v1.0"
+    assert not (src / "child").exists()
+
+
+def test_backend_refuses_offline_without_a_bundle_route(tmp_path: Path) -> None:
+    """Before any build step is returned, not only when the checkout Action
+    is later performed (D-031: a plan must be complete and accurate)."""
+    backend = _bundle_backend(tmp_path, offline=True, rows=[], routes=Routes({}))
+    manifest = _manifest(ref="v1.0", commit=SHA)
+    with pytest.raises(CatalogueMiss, match="not on Bunker"):
+        backend.steps(manifest, manifest.install[0])
+
+
+def test_backend_refuses_offline_with_no_fetcher(tmp_path: Path) -> None:
+    backend = _bundle_backend(
+        tmp_path, offline=True, rows=[], routes=Routes({}), with_fetcher=False
+    )
+    manifest = _manifest(ref="v1.0", commit=SHA)
+    with pytest.raises(BackendError, match="without a fetcher"):
+        backend.steps(manifest, manifest.install[0])
+
+
+def test_backend_refuses_offline_a_tag_with_no_recorded_commit(tmp_path: Path) -> None:
+    backend = _bundle_backend(tmp_path, offline=True, rows=[], routes=Routes({}))
+    manifest = _manifest()  # the default block: ref="v1.0", no `commit`
+    with pytest.raises(BackendError, match="no recorded commit"):
+        backend.steps(manifest, manifest.install[0])
+
+
+def test_backend_plain_clone_is_unaffected_with_no_context_at_all(tmp_path: Path) -> None:
+    """The existing, context-less path (every test above this section) is
+    exactly what every operator not enrolled in a Bunker still gets."""
+    manifest = _manifest()
+    backend = _backend(_HeadRunner(SHA), tmp_path)
+    steps = backend.steps(manifest, manifest.install[0])
+    assert not [s for s in steps if isinstance(s, Action) and s.kind == "checkout"]
+    assert [s for s in steps if isinstance(s, Command) and s.argv[:2] == ("git", "init")]

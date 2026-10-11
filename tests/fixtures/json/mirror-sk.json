@@ -1,0 +1,25 @@
+{
+  "schema": "hammunition/1",
+  "kind": "mirror",
+  "engine": "<engine>",
+  "url": "http://bunker.invalid/",
+  "name": "bunker",
+  "mode": "personal",
+  "enrolment_id": null,
+  "accepted_serial": 42,
+  "generated": "2026-10-07T12:00:00Z",
+  "age_days": 0,
+  "require_hardware": false,
+  "keys": [
+    {
+      "id": "<fingerprint>",
+      "algorithm": "sk-ssh-ed25519@openssh.com",
+      "bits": 256,
+      "hardware": true,
+      "no_touch_required": true,
+      "weak": false,
+      "warning": null
+    }
+  ],
+  "warnings": []
+}

@@ -3,7 +3,7 @@
 # Applications by activity
 
 Every application the catalog carries, laid out the way the desktop menu is: one
-chapter per activity, one section per thing a person looks for. **327
+chapter per activity, one section per thing a person looks for. **332
 applications.** A program with several tags is listed under each.
 
 Each entry links to its page, which says what it does and why you would want it,
@@ -675,12 +675,17 @@ Rayhunter, GSM analysis and dongle calibration against base stations.
 
 Proxmark3, libnfc, MIFARE key recovery and smartcard reader checks.
 
+- [fido2-tools](packages/fido2-tools.md) — FIDO2 authenticator discovery and management tools (in [`security-keys`](profiles/security-keys.md))
 - [libfreefare-bin](packages/libfreefare-bin.md) — Tools for MIFARE DESFire, Ultralight and Classic over libnfc (in [`rfid`](profiles/rfid.md))
 - [libnfc-bin](packages/libnfc-bin.md) — Command-line tools for PN53x-based NFC readers (in [`rfid`](profiles/rfid.md))
+- [libpam-u2f](packages/libpam-u2f.md) — U2F PAM module installed without enabling token login (in [`security-keys`](profiles/security-keys.md))
 - [mfcuk](packages/mfcuk.md) — MIFARE Classic key recovery with no known key — the slow path (in [`rfid`](profiles/rfid.md))
 - [mfoc](packages/mfoc.md) — Key recovery for MIFARE Classic cards with at least one known key (in [`rfid`](profiles/rfid.md))
+- [opensc](packages/opensc.md) — Smartcard and PKCS#11 tools for hardware signing (in [`security-keys`](profiles/security-keys.md))
 - [pcsc-tools](packages/pcsc-tools.md) — Smartcard reader diagnostics — is the reader even working? (in [`rfid`](profiles/rfid.md))
+- [pcscd](packages/pcscd.md) — PC/SC smartcard daemon for PIV readers (in [`security-keys`](profiles/security-keys.md))
 - [proxmark3](packages/proxmark3.md) — Client and firmware tooling for the Proxmark3 RFID and NFC research device (in [`rfid`](profiles/rfid.md))
+- [yubikey-manager](packages/yubikey-manager.md) — YubiKey FIDO2 and PIV management utility (in [`security-keys`](profiles/security-keys.md))
 
 ### Sub-GHz, ISM & Remotes
 

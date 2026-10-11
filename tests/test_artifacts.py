@@ -184,6 +184,18 @@ def _root(tmp_path: Path) -> Path:
             {"pins": [{"tile": TILE_VT, "size": 41, "sha256": "c" * 64, "md5": "d" * 32}]}
         )
     )
+    # Task 16: list_inputs tries US Topo, FSTopo and 3DEP selections for every
+    # regional unit's regions, whatever the selected units are, so these three
+    # carried indexes must exist here too -- a missing one would otherwise
+    # defer with a message naming this fixture's own (unstable, per-run) tmp
+    # path, which a committed golden can never match twice. One filler row far
+    # from Vermont and Delaware keeps every selection a real, stable "nothing
+    # here" record instead of a deferral.
+    (root / "data" / "usgs-3dep-tiles.txt").write_text(f"USGS_13_n01w001 1000000 {'a' * 32}\n")
+    (root / "data" / "ustopo-quads.txt").write_text(
+        f"0.0 -1.0 1.0 0.0 1000000 {'b' * 32} ZZ/filler_20260101\n"
+    )
+    (root / "data" / "fstopo-quads.txt").write_text("0.0 -1.0 1.0 0.0 999999 26 ZZ FillerCell\n")
     _write_comaps_pins(root)
     # The real book list (its licence lines), and pins written here so the
     # listing does not move every time the real pins are regenerated.

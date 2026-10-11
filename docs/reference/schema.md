@@ -16,6 +16,7 @@ A manifest is **strict**: an unknown field is an error, not ignored. That is del
 | `version` | `str` | **yes** |  |
 | `summary` | `str` | **yes** |  |
 | `categories` | `list[str]` | **yes** | Flat tags, D-003. |
+| `licence` | `str` | no (default `licence not recorded in this manifest`) | The terms the installed software itself is under -- never inferred from this YAML file's own CC0-1.0 header, which licenses the catalog entry describing the software, not the software (Task 16, D-070). Read by `hammunition artifacts` as the licence line for a `source`, `binary`, `node` or `git` payload and for a `derived` block's converter tool, and by `hammunition.artifacts.list_git_pins` for the git pin it lists, where the install block itself carries none. A missing value stays the explicit default above rather than a guess. |
 | `install` | `list[InstallBlock]` | **yes** |  |
 | `depends` | `list[str]` | no |  |
 | `provides` | `list[str]` | no |  |

@@ -1,0 +1,1 @@
+- #381 (D-085): Enrol signed Bunker catalogues, resolve data with publishers unreachable, fetch pinned payloads and git bundles from the Bunker, and check hardware signing readiness without enabling PAM.

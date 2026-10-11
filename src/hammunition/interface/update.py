@@ -13,7 +13,7 @@ rule the text follows for anything that says where the operator is (the
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import ClassVar
 
 from hammunition.distro import Target
@@ -93,6 +93,14 @@ class UpdateDocument(Strict):
     upstream: tuple[UpstreamRowView, ...] | None = described(
         "the upstream comparison; null unless `--upstream` asked for it"
     )
+    offline: str | None = field(
+        default=None,
+        metadata={
+            "doc": "present under `--offline`: that nothing was fetched, which Bunker and "
+            "catalogue serial were verified, and whether the local trust state advanced; "
+            "null otherwise"
+        },
+    )
 
 
 def build_update(
@@ -102,6 +110,7 @@ def build_update(
     lists_note: str,
     from_log: bool,
     upstream: Sequence[UpstreamRow] | None,
+    offline: str | None = None,
 ) -> UpdateDocument:
     return UpdateDocument(
         target=target_view(target),
@@ -143,4 +152,5 @@ def build_update(
         )
         if upstream is not None
         else None,
+        offline=offline,
     )

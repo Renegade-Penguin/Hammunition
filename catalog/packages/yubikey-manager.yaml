@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: Copyright (C) 2026 Renegade Penguin LLC
+# SPDX-License-Identifier: CC0-1.0
+
+name: yubikey-manager
+version: 5.6.1
+summary: YubiKey FIDO2 and PIV management utility
+categories:
+- rfid
+install:
+- install:
+    method: apt
+    packages:
+    - yubikey-manager
+update:
+  probe:
+    method: apt_policy
+  strategy: apt_upgrade
+documentation:
+  what_it_does: Provides ykman for inspecting and managing YubiKey FIDO2 and PIV applications,
+    including PINs and supported keys.
+  why_you_want_it: It is useful for YubiKey owners; other manufacturers' tokens use
+    their own tools or standard FIDO2 utilities.
+  prerequisites: A supported YubiKey. Follow the token's own documentation before
+    changing PINs or keys.
+  known_problems: Ubuntu ykman 5.2.1 with firmware 5.7 PIV Ed25519 or RSA 3072/4096
+    is unmeasured. No PyPI upgrade is installed here.
+  upstream_url: https://github.com/Yubico/yubikey-manager
+  upstream_support: https://github.com/Yubico/yubikey-manager/issues
