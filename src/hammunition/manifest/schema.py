@@ -21,6 +21,7 @@ requirements rather than preferences:
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Mapping, Sequence
 from datetime import date
 from enum import StrEnum
@@ -2102,6 +2103,33 @@ class ConfigFile(Strict):
 _EXEC_FORBIDDEN = set(" \t\n\r;|&$`%<>")
 
 
+#: Longest ``first_start`` text, and longest ``left_in_place`` path and list.
+#: The text is printed under a service in the plan, so it is one short paragraph
+#: (#289).
+FIRST_START_MAX = 400
+LEFT_IN_PLACE_PATH_MAX = 120
+LEFT_IN_PLACE_MAX = 16
+_LEFT_IN_PLACE_COMPONENT = re.compile(
+    r"[A-Za-z0-9_][A-Za-z0-9._+@=-]*|\.[A-Za-z0-9_][A-Za-z0-9._+@=-]*"
+)
+
+
+def _printable_text(value: str, what: str) -> str:
+    """Manifest prose that is printed to a terminal: one line, no control or
+    format character of any kind (ESC, C1, NUL, bidi overrides), not blank.
+    ``unicodedata`` category ``C*`` is the whole class, so a character this
+    list did not think of is refused too."""
+    if not value.strip():
+        raise ManifestError(f"{what} is blank; omit it")
+    for char in value:
+        if unicodedata.category(char).startswith("C"):
+            raise ManifestError(
+                f"{what} contains the control or format character U+{ord(char):04X}; "
+                f"it is printed to a terminal and must be plain text on one line"
+            )
+    return value
+
+
 class UserServiceListen(Strict):
     """One address a user service binds. Loopback only, refused otherwise."""
 
@@ -2161,6 +2189,28 @@ class UserService(Strict):
             "port, is not retried forever."
         ),
     )
+
+    first_start: str | None = Field(
+        default=None,
+        description=(
+            "What the service does the first time it starts that the operator "
+            "would not guess from its name: files it writes outside the engine's "
+            "own paths, an identity it creates, an interface it opens. Printed "
+            "under the service in the install plan. One line of plain text, at "
+            "most 400 characters, no control characters (#289)."
+        ),
+    )
+
+    @field_validator("first_start")
+    @classmethod
+    def _first_start_is_plain(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if len(value) > FIRST_START_MAX:
+            raise ManifestError(
+                f"first_start is {len(value)} characters; the limit is {FIRST_START_MAX}"
+            )
+        return _printable_text(value, "first_start")
 
     @property
     def is_plain(self) -> bool:
@@ -2563,6 +2613,18 @@ class PackageManifest(Strict):
             "is missing, like config_files."
         ),
     )
+    left_in_place: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Paths under the operator's home that this unit's software creates "
+            "and `hammunition uninstall` deliberately does not remove (`~/.reticulum`). "
+            "Named in the uninstall plan so nobody finds out afterwards. "
+            "Disclosure only: nothing in the engine reads these to delete, move "
+            "or touch them. Each is `~/` and plain path components, no `..`, no "
+            "glob, no control character; at most 16, each at most 120 characters "
+            "(#289)."
+        ),
+    )
     debconf_selections: list[str] = Field(
         default_factory=list,
         description=(
@@ -2612,6 +2674,35 @@ class PackageManifest(Strict):
             if value is not None and not value.strip():
                 raise ManifestError(f"{field} is blank; omit it or give the menu something to show")
         return self
+
+    @field_validator("left_in_place")
+    @classmethod
+    def _left_in_place_is_plain_home_paths(cls, value: list[str]) -> list[str]:
+        if len(value) > LEFT_IN_PLACE_MAX:
+            raise ManifestError(
+                f"left_in_place has {len(value)} paths; the limit is {LEFT_IN_PLACE_MAX}"
+            )
+        if len(set(value)) != len(value):
+            raise ManifestError("left_in_place names a path twice")
+        for path in value:
+            if len(path) > LEFT_IN_PLACE_PATH_MAX:
+                raise ManifestError(
+                    f"left_in_place path of {len(path)} characters; the limit is "
+                    f"{LEFT_IN_PLACE_PATH_MAX}"
+                )
+            _printable_text(path, "a left_in_place path")
+            parts = path.split("/")
+            if (
+                parts[0] != "~"
+                or len(parts) < 2
+                or not all(_LEFT_IN_PLACE_COMPONENT.fullmatch(p) for p in parts[1:])
+                or any(p in (".", "..") for p in parts[1:])
+            ):
+                raise ManifestError(
+                    f"left_in_place {path!r}: must be `~/` then plain path components "
+                    f"(letters, digits and . _ + @ = -), with no `..`, glob or variable"
+                )
+        return value
 
     @model_validator(mode="after")
     def _user_services_names_exclusive(self) -> PackageManifest:

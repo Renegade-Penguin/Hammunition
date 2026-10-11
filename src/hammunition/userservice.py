@@ -106,6 +106,9 @@ class PlannedUserService:
     """True for a plain service (:attr:`UserService.is_plain`): an install also
     ``try-restart``s it, so an upgrade reaches one that is running and a stopped
     one stays stopped until login."""
+    first_start: str | None = None
+    """What the service does the first time it starts (the manifest's
+    ``first_start``), disclosed in the plan; None when the manifest says nothing."""
 
 
 def device_unit_name(path: str) -> str:
@@ -330,6 +333,7 @@ def _planned(
         listens=tuple((lst.address, lst.port) for lst in svc.listens),
         unit=manifest.name,
         plain=svc.is_plain,
+        first_start=svc.first_start,
     )
 
 

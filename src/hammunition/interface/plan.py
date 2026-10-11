@@ -50,6 +50,7 @@ from hammunition.backends.topo import TopoDisclosure, no_quads_line
 from hammunition.backends.topo_mosaic import MEASURED as TOPO_MEASURED
 from hammunition.backends.topo_mosaic import fstopo_estimate, warp_estimate
 from hammunition.consent import repo_env_var
+from hammunition.console.fmt import clean
 from hammunition.desktop import Desktop, describe_set
 from hammunition.execute import Step
 from hammunition.geofabrik import PINNED, RegionFile
@@ -57,6 +58,8 @@ from hammunition.interface.envelope import Strict, TargetView, described
 from hammunition.interface.plan_group import render_steps
 from hammunition.interface.text import wrap
 from hammunition.manifest.schema import (
+    FIRST_START_MAX,
+    LEFT_IN_PLACE_PATH_MAX,
     AptInstall,
     BinaryInstall,
     DataInstall,
@@ -659,6 +662,11 @@ class UserServiceLine(Strict):
     starts_now: bool = described(
         "whether the plan restarts it now (a rig service whose radio's port is present)"
     )
+    first_start: str = described(
+        "what the service does the first time it starts, from the manifest: files it "
+        "writes, an identity it creates, an interface it opens; empty when the manifest "
+        "says nothing. Plain text, control characters removed, at most 400 characters"
+    )
 
 
 @dataclass(frozen=True)
@@ -834,6 +842,10 @@ class RemovalPlanView(Strict):
         "present, but the log does not attribute it"
     )
     left_foreign: tuple[UnitPackages, ...] = described("installed, but not by this engine")
+    left_in_place: tuple[UnitFiles, ...] = described(
+        "paths the unit's manifest says uninstall leaves in the operator's home "
+        "(`~/.reticulum`); shown, never removed, whether or not they exist yet"
+    )
     already_absent: tuple[UnitPackages, ...] = described("nothing to remove")
     not_reversed: str = described("what uninstall does not undo, by design (D-004)")
     commands: tuple[StepView, ...] = described("every step, in order")
@@ -1383,6 +1395,7 @@ def build_install_view(
                 fills=svc.filled_from,
                 listen=", ".join(f"{address}:{port}" for address, port in svc.listens),
                 starts_now=svc.device_path is not None and Path(svc.device_path).exists(),
+                first_start=shown_text(svc.first_start or "", FIRST_START_MAX),
             )
             for svc in plan.user_services
         ),
@@ -1632,6 +1645,9 @@ def render_plan_view(view: InstallPlanView, *, target: TargetView, full: bool = 
             lines.append(f"  {svc.unit}: {svc.name}")
             lines.append(f"    writes   {svc.path}")
             lines.append(f"    runs     {svc.exec}")
+            if svc.first_start:
+                lines.append("    first start:")
+                lines += wrap(svc.first_start, indent="      ")
             if svc.fills:
                 lines.append(f"    filled from: {', '.join(svc.fills)}")
                 lines.append(
@@ -1937,6 +1953,14 @@ def _render_topo(topo: TopoSectionView) -> list[str]:
     return lines
 
 
+def shown_text(text: str, limit: int) -> str:
+    """Manifest text on its way to a terminal or a JSON document: every escape
+    and control character removed by the console's own cleaner, whitespace
+    collapsed to single spaces, cut to *limit*. The schema refuses such text at
+    load; this is the second line for a manifest built any other way."""
+    return " ".join(clean(text).split())[:limit]
+
+
 def build_removal_view(
     plan: RemovalPlan, commands: Sequence[Step], *, euid: int
 ) -> RemovalPlanView:
@@ -1964,6 +1988,13 @@ def build_removal_view(
             for unit, paths in plan.left_unattributed.items()
         ),
         left_foreign=shown(plan.left_foreign),
+        left_in_place=tuple(
+            UnitFiles(
+                unit=unit,
+                paths=tuple(shown_text(p, LEFT_IN_PLACE_PATH_MAX) for p in paths),
+            )
+            for unit, paths in plan.left_in_place.items()
+        ),
         already_absent=shown(plan.already_absent),
         not_reversed=NOT_REVERSED
         + "".join(
@@ -2002,6 +2033,15 @@ def render_removal_view(view: RemovalPlanView, *, target: TargetView) -> list[st
             for entry in shown:
                 packages = " ".join(entry.packages) or "(nothing resolves here)"
                 lines.append(f"  {entry.unit:28} {packages}")
+    if view.left_in_place:
+        lines += [
+            "",
+            "Left in place by design — your data, which uninstall never removes "
+            "(named by the catalog, shown whether or not it exists yet):",
+        ]
+        for files in view.left_in_place:
+            for path in files.paths:
+                lines.append(f"  {files.unit:28} {path}")
     lines += ["", view.not_reversed]
     if view.commands:
         lines += ["", f"Commands ({len(view.commands)}):"]

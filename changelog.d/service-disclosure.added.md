@@ -1,0 +1,1 @@
+- The plan now discloses a user service's first-start behaviour (manifest field `first_start`) under *User services*, and the uninstall plan names what it leaves in place (manifest field `left_in_place`), filled in for `rns`, `lxmf` and `nomadnet`; both are validated, cleaned of control characters, capped, and shown without ever being acted on (issue #289, D-086).
