@@ -42,6 +42,7 @@ from typing import TYPE_CHECKING
 from hammunition.backends.base import Action, Command
 from hammunition.backends.source import SourceLayout, extract, tree_install_commands
 from hammunition.manifest.schema import PackageManifest, RemoteArtifact, VenvInstall
+from hammunition.payloads import payload_action, payload_cached, preflight_payloads
 
 if TYPE_CHECKING:
     # Type-only: `hammunition.backends/__init__.py` imports this module
@@ -50,6 +51,7 @@ if TYPE_CHECKING:
     # `Fetcher` is only ever used in an annotation, which `from __future__
     # import annotations` defers, so it never needs a real import.
     from hammunition.fetch import Fetcher
+    from hammunition.resolution import ResolutionContext
 
 __all__ = ["VenvBackend"]
 
@@ -103,7 +105,9 @@ class VenvBackend:
         build_root: Path | None = None,
         prefix: Path = Path("/usr/local"),
         owner: str | None = None,
+        context: ResolutionContext | None = None,
     ) -> None:
+        self.context = context
         self.venv_root = venv_root
         self.bin_dir = bin_dir
         self.fetcher = fetcher
@@ -113,6 +117,10 @@ class VenvBackend:
         self.prefix = prefix
 
     def steps(self, manifest: PackageManifest, block: VenvInstall) -> list[Action | Command]:
+        if block.payload is not None:
+            # Before the venv, build and pip steps exist: pip's own dependencies
+            # are not mirrored here, only the payload tree this block pins.
+            self._preflight_payload(manifest, block.payload)
         venv = self.venv_root / manifest.name
         requirements = self.venv_root / f"{manifest.name}.requirements.txt"
         pip = venv / "bin" / "pip"
@@ -175,6 +183,23 @@ class VenvBackend:
             )
         return steps
 
+    def _preflight_payload(self, manifest: PackageManifest, payload: RemoteArtifact) -> None:
+        """The existing payload presence check, then the Bunker's answer for it."""
+        from hammunition.backends.base import BackendError
+
+        if self.fetcher is None or self.build_root is None:
+            raise BackendError(
+                f"{manifest.name} declares a venv payload and this backend was "
+                f"built without a fetcher/build root. Skipping it would install "
+                f"a venv that runs nothing."
+            )
+        preflight_payloads(
+            manifest.name,
+            ((payload, None),),
+            context=self.context,
+            cached=payload_cached(self.fetcher),
+        )
+
     def _payload_steps(
         self, manifest: PackageManifest, block: VenvInstall
     ) -> list[Action | Command]:
@@ -191,12 +216,7 @@ class VenvBackend:
         layout = SourceLayout(root=self.build_root / f"{manifest.name}-{payload.sha256[:8]}")
         fetcher = self.fetcher
         steps: list[Action | Command] = [
-            Action(
-                kind="fetch",
-                description=f"Download and verify {manifest.name}'s payload tree",
-                detail=f"{payload.url} -> {fetcher.path_for(payload)} (sha256 verified)",
-                perform=partial(_fetch_payload, fetcher, payload),
-            ),
+            payload_action(manifest.name, payload, fetcher, label="payload tree"),
             Action(
                 kind="extract",
                 description=f"Unpack the {manifest.name} payload",
@@ -226,12 +246,6 @@ class VenvBackend:
             )
         )
         return steps
-
-
-def _fetch_payload(fetcher: Fetcher, payload: RemoteArtifact) -> str:
-    result = fetcher.fetch(payload)
-    where = "cached" if result.from_cache else "downloaded"
-    return f"{where} {result.path.name}, sha256 verified"
 
 
 def _extract_payload(fetcher: Fetcher, payload: RemoteArtifact, dest: Path) -> str:

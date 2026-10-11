@@ -22,7 +22,8 @@
       "checksum_url": null,
       "size": 76000000,
       "licence": "CC BY-SA",
-      "deferred": null
+      "deferred": null,
+      "part_size": null
     },
     {
       "unit": "kiwix-library",
@@ -33,7 +34,8 @@
       "checksum_url": null,
       "size": 1100000000,
       "licence": "CC BY-SA 4.0 (text; media individually licensed)",
-      "deferred": null
+      "deferred": null,
+      "part_size": null
     },
     {
       "unit": "kiwix-library",
@@ -44,7 +46,10 @@
       "checksum_url": null,
       "size": null,
       "licence": "each book's own, from catalog/data/kiwix-books.yaml",
-      "deferred": "not in the catalog's book list: no.such.book_en_all. `hammunition reference books` lists the books the catalog offers; a book not on it has no licence the catalog can print, so it is not offered"
+      "deferred": "not in the catalog's book list: no.such.book_en_all. `hammunition reference books` lists the books the catalog offers; a book not on it has no licence the catalog can print, so it is not offered",
+      "part_size": null
     }
-  ]
+  ],
+  "inputs": [],
+  "git_pins": []
 }

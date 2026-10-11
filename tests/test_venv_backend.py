@@ -173,6 +173,12 @@ def hybrid_manifest(script: str | None) -> PackageManifest:
 
 def test_payload_plans_fetch_extract_build_and_tree_install(tmp_path: Path) -> None:
     class StubFetcher:
+        offline = False
+        mirror = None
+
+        def sources_for(self, url: str, mirror: Any) -> tuple[tuple[str, str], ...]:
+            return (("publisher", url),)
+
         def path_for(self, artifact: Any) -> Path:
             return tmp_path / "cache" / "tree.tar.gz"
 
@@ -260,6 +266,12 @@ def test_the_venv_backend_passes_the_operator_to_the_payload_tree(tmp_path: Path
     so the payload tree is handed to the operator by an explicit step."""
 
     class StubFetcher:
+        offline = False
+        mirror = None
+
+        def sources_for(self, url: str, mirror: Any) -> tuple[tuple[str, str], ...]:
+            return (("publisher", url),)
+
         def path_for(self, artifact: Any) -> Path:
             return tmp_path / "cache" / "tree.tar.gz"
 

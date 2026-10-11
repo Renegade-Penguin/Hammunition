@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from hammunition.backends.apt import AptBackend, AptPackageState, AptSimulation
+from hammunition.backends.base import CommandResult
 from hammunition.distro import Target
 from hammunition.state import ArtifactRemoval, RemovalPlan
 from json_support import (
@@ -52,6 +53,16 @@ def _machine(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, str]:
         "simulate",
         lambda self, pkgs, *, release=None, no_recommends=False: AptSimulation(
             ok=True, installs={p: frozenset({"stable"}) for p in pkgs}, release=release
+        ),
+    )
+    # A12: test_runlog's `doctor` calls go through the real security-key
+    # gather path (its CHECKS are not stubbed the way test_json_doctor's are),
+    # so this shared machine fixture needs its own explicit, inert result.
+    monkeypatch.setattr(
+        cli,
+        "_security_key_probe",
+        lambda argv: CommandResult(
+            argv=argv, returncode=127, stdout="", stderr="diagnostic tool unavailable in fixture"
         ),
     )
     return {str(tmp_path): "<tmp>", str(FIXTURE_CATALOG): "<catalog>"}

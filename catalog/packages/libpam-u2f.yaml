@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: Copyright (C) 2026 Renegade Penguin LLC
+# SPDX-License-Identifier: CC0-1.0
+
+name: libpam-u2f
+version: 1.4.0
+summary: U2F PAM module installed without enabling token login
+categories:
+- rfid
+install:
+- install:
+    method: apt
+    packages:
+    - libpam-u2f
+update:
+  probe:
+    method: apt_policy
+  strategy: apt_upgrade
+documentation:
+  what_it_does: Provides the PAM module used by separately configured token-based
+    login or sudo authentication.
+  why_you_want_it: It makes the module available for a later reviewed setup; installing
+    this unit alone has not been measured for archive PAM/debconf side effects on
+    every target. Hammunition itself writes no PAM configuration.
+  prerequisites: PAM enabling is outside this profile and plan. Keep a working fallback
+    login before any future authentication change.
+  known_problems: An incorrect PAM setup can prevent login. Hammunition does not write
+    PAM files or register tokens in this phase.
+  upstream_url: https://github.com/Yubico/pam-u2f
+  upstream_support: https://github.com/Yubico/pam-u2f/issues

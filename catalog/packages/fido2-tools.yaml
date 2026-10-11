@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: Copyright (C) 2026 Renegade Penguin LLC
+# SPDX-License-Identifier: CC0-1.0
+
+name: fido2-tools
+version: 1.15.0
+summary: FIDO2 authenticator discovery and management tools
+categories:
+- rfid
+install:
+- install:
+    method: apt
+    packages:
+    - fido2-tools
+    - libfido2-1
+update:
+  probe:
+    method: apt_policy
+  strategy: apt_upgrade
+documentation:
+  what_it_does: Lists FIDO2 authenticators and provides the library and device access
+    rules used by OpenSSH security keys.
+  why_you_want_it: It checks whether your session can reach a FIDO2 token before you
+    try hardware-backed signing.
+  prerequisites: A FIDO2 authenticator for detection. OpenSSH 8.2+ is required for
+    security-key signing.
+  known_problems: A token may need a touch or PIN. Running tools as root hides missing
+    user device permissions.
+  upstream_url: https://github.com/Yubico/libfido2
+  upstream_support: https://github.com/Yubico/libfido2/issues

@@ -41,13 +41,14 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
 
 from .copernicus import Ring
+from .resolution import CatalogueMiss, ResolutionContext
 from .retry import retrying_head
 from .ustopo import QuadIndex, boxed_cells
 
@@ -67,6 +68,7 @@ __all__ = [
     "map_url",
     "parse_index",
     "parse_row",
+    "recorded_sheet",
     "render_row",
 ]
 
@@ -321,6 +323,11 @@ class GatewayProbe:
             )
         if ".." in urllib.parse.urlsplit(url).path.split("/"):
             raise FstopoError(f"{secoord}: the redirect {location!r} climbs out of the gateway")
+        if not _is_gateway_geotiff(url):
+            raise FstopoError(
+                f"{secoord}: the gateway redirected to {location!r}, which is not a plain "
+                f"GeoTIFF path under {GATEWAY}; refused, not followed"
+            )
         status, size, _ = self._head(url)
         if status != 200 or size <= 0:
             raise FstopoError(
@@ -328,3 +335,79 @@ class GatewayProbe:
                 f"fetch or bound the download by"
             )
         return url, size
+
+
+_GATEWAY_PARTS = urllib.parse.urlsplit(GATEWAY)
+
+
+def _is_gateway_geotiff(url: str) -> bool:
+    """Whether *url* is a GeoTIFF file under the raster gateway, by its parts.
+
+    A prefix test lets a look-alike host, userinfo, a port, a backslash or an
+    encoded ``..`` through; this asks for all of: scheme https, exactly the
+    gateway's host (so no userinfo and no port), a path under the gateway's
+    path with a ``/`` boundary, no control character, backslash or ``.``/``..``
+    segment however many times it is percent-encoded, and a ``.tif``/``.tiff``
+    name. No query, fragment, empty segment or encoded slash. The URL must already be canonically percent-encoded, as the live
+    probe leaves it."""
+    if not url or url != urllib.parse.quote(url, safe=":/?&=%"):
+        return False
+    try:
+        parts = urllib.parse.urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return False
+    if (
+        parts.scheme != "https"
+        or parts.netloc != _GATEWAY_PARTS.netloc
+        or parts.username is not None
+        or parts.password is not None
+        or port not in (None, 443)
+        or parts.fragment
+        or parts.query
+        or not parts.path.startswith(_GATEWAY_PARTS.path)
+        or not parts.path.lower().endswith((".tif", ".tiff"))
+    ):
+        return False
+    path = parts.path
+    for _ in range(4):  # percent-encoding of percent-encoding
+        if "\\" in path or any(ord(c) < 0x20 or ord(c) == 0x7F for c in path):
+            return False
+        segments = path.split("/")
+        if any(segment in (".", "..") for segment in segments):
+            return False
+        if "" in segments[1:] or "%2f" in path.lower():
+            return False  # an empty segment, or a slash hidden inside one
+        decoded = urllib.parse.unquote(path)
+        if decoded == path:
+            return True
+        path = decoded
+    return False
+
+
+def recorded_sheet(
+    quad: FsQuad, *, unit: str, pins: Mapping[int, FsPin], context: ResolutionContext
+) -> FsQuadFile:
+    """*quad* as the Bunker's record has it, offline.
+
+    The record only ever supplies the file's URL and, for a sheet the
+    repository has no pin for, its announced size. A pinned sheet is checked
+    against the repository's own pin (size, then sha256), never against the
+    record's view of itself; an unpinned one stays **unverified** however the
+    Bunker labels it, so a sha256 in the record never makes it pinned. The
+    bytes are checked later, by the fetch. The record must be explicitly
+    labelled unverified (``unverified-fetch``/``unverified-zip``); this grants
+    nothing: the plan's disclosure and every consent gate are unchanged."""
+    row = context.entry(unit, quad.name)
+    url = row.publisher_url or ""
+    if not _is_gateway_geotiff(url):
+        raise CatalogueMiss(f"{unit}/{quad.name}: publisher_url is not a Forest Service GeoTIFF")
+    pin = pins.get(quad.secoord)
+    if pin is not None:
+        context.require_payload(unit, quad.name, size=pin.size)
+        context.require_payload(unit, quad.name, sha256=pin.sha256)
+        return FsQuadFile(quad, url, pin.size, pin.sha256)
+    context.unverified(unit, quad.name)
+    if row.publisher_size is None or row.publisher_size <= 0 or row.publisher_size != row.size:
+        raise CatalogueMiss(f"{unit}/{quad.name}: publisher_size is absent or inconsistent")
+    return FsQuadFile(quad, url, row.publisher_size, None)

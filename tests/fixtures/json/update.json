@@ -44,5 +44,6 @@
   "upgrade_command": "sudo env DEBIAN_FRONTEND=noninteractive apt-get install --yes --only-upgrade --no-remove -- fixture-apt",
   "rebuild_command": null,
   "upstream_declared": [],
-  "upstream": null
+  "upstream": null,
+  "offline": null
 }

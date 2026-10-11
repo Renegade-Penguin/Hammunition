@@ -22,7 +22,8 @@
       "checksum_url": null,
       "size": 99,
       "licence": "ODbL-1.0",
-      "deferred": null
+      "deferred": null,
+      "part_size": null
     },
     {
       "unit": "osm-regions",
@@ -33,7 +34,8 @@
       "checksum_url": "https://download.geofabrik.de/north-america/us/delaware-260101.osm.pbf.md5",
       "size": 12345,
       "licence": "ODbL-1.0",
-      "deferred": null
+      "deferred": null,
+      "part_size": null
     },
     {
       "unit": "dem-copernicus",
@@ -44,7 +46,8 @@
       "checksum_url": "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N38_00_W076_00_DEM/Copernicus_DSM_COG_10_N38_00_W076_00_DEM.tif",
       "size": 40000000,
       "licence": "Copernicus DEM licence (free, with attribution)",
-      "deferred": null
+      "deferred": null,
+      "part_size": null
     },
     {
       "unit": "dem-copernicus",
@@ -55,7 +58,111 @@
       "checksum_url": null,
       "size": 41,
       "licence": "Copernicus DEM licence (free, with attribution)",
+      "deferred": null,
+      "part_size": null
+    }
+  ],
+  "inputs": [
+    {
+      "kind": "region-outline",
+      "region": "north-america/us/vermont",
+      "name": "north-america/us/vermont.poly",
+      "url": "https://download.geofabrik.de/north-america/us/vermont.poly",
+      "sha256": "d7d2c03dba32f6f78a4117b7ec063d6513a71220af7f1060b9a1fb6b74e0e4b9",
+      "size": 62,
+      "content": "vermont\n1\n-72.9 43.1\n-72.1 43.1\n-72.1 43.9\n-72.9 43.9\nEND\nEND\n",
+      "deferred": null
+    },
+    {
+      "kind": "tile-selection",
+      "region": "north-america/us/vermont",
+      "name": "north-america/us/vermont.tiles",
+      "url": null,
+      "sha256": "76b0d1387826051622812c0191222cda8e1972d92e4cd40be8bd6bc9964a7883",
+      "size": 77,
+      "content": "# squares with no published tile: 0\nCopernicus_DSM_COG_10_N43_00_W073_00_DEM\n",
+      "deferred": null
+    },
+    {
+      "kind": "sheet-selection",
+      "region": "north-america/us/vermont",
+      "name": "north-america/us/vermont.quads",
+      "url": null,
+      "sha256": "84e7f5698bdcc2e98db2ddebfabced1d339eb1736a840ec86fbdb2bef3569743",
+      "size": 19,
+      "content": "# US Topo quads: 0\n",
+      "deferred": null
+    },
+    {
+      "kind": "dem3dep-selection",
+      "region": "north-america/us/vermont",
+      "name": "north-america/us/vermont.tiles",
+      "url": null,
+      "sha256": "9aa7a69f487aed4b9bf470d4978d4a1fcea4626aac5e7e9f96bfe7a35af8ee23",
+      "size": 36,
+      "content": "# squares with no published tile: 1\n",
+      "deferred": null
+    },
+    {
+      "kind": "fstopo-selection",
+      "region": "north-america/us/vermont",
+      "name": "north-america/us/vermont.quads",
+      "url": null,
+      "sha256": "0b9160a4b78675e46b99a898f170fc1ee8e45620bbe71fd6733137da203f5824",
+      "size": 18,
+      "content": "# FSTopo quads: 0\n",
+      "deferred": null
+    },
+    {
+      "kind": "region-outline",
+      "region": "north-america/us/delaware",
+      "name": "north-america/us/delaware.poly",
+      "url": "https://download.geofabrik.de/north-america/us/delaware.poly",
+      "sha256": "aeaa07ce866ad25a76b21ec4798ef11361aff92b0f3f99decfc655b7c0c4d2f0",
+      "size": 63,
+      "content": "delaware\n1\n-75.9 38.1\n-75.1 38.1\n-75.1 38.9\n-75.9 38.9\nEND\nEND\n",
+      "deferred": null
+    },
+    {
+      "kind": "tile-selection",
+      "region": "north-america/us/delaware",
+      "name": "north-america/us/delaware.tiles",
+      "url": null,
+      "sha256": "a67127fbcc936222f0329b6d6f5f2a52c350dea0b1f48d719ba38b4d5d11518e",
+      "size": 77,
+      "content": "# squares with no published tile: 0\nCopernicus_DSM_COG_10_N38_00_W076_00_DEM\n",
+      "deferred": null
+    },
+    {
+      "kind": "sheet-selection",
+      "region": "north-america/us/delaware",
+      "name": "north-america/us/delaware.quads",
+      "url": null,
+      "sha256": "84e7f5698bdcc2e98db2ddebfabced1d339eb1736a840ec86fbdb2bef3569743",
+      "size": 19,
+      "content": "# US Topo quads: 0\n",
+      "deferred": null
+    },
+    {
+      "kind": "dem3dep-selection",
+      "region": "north-america/us/delaware",
+      "name": "north-america/us/delaware.tiles",
+      "url": null,
+      "sha256": "9aa7a69f487aed4b9bf470d4978d4a1fcea4626aac5e7e9f96bfe7a35af8ee23",
+      "size": 36,
+      "content": "# squares with no published tile: 1\n",
+      "deferred": null
+    },
+    {
+      "kind": "fstopo-selection",
+      "region": "north-america/us/delaware",
+      "name": "north-america/us/delaware.quads",
+      "url": null,
+      "sha256": "0b9160a4b78675e46b99a898f170fc1ee8e45620bbe71fd6733137da203f5824",
+      "size": 18,
+      "content": "# FSTopo quads: 0\n",
       "deferred": null
     }
-  ]
+  ],
+  "git_pins": []
 }

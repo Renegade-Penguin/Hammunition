@@ -40,17 +40,19 @@ continue, and the ledger's step, last in the transaction, fails it by name.
 
 from __future__ import annotations
 
+import dataclasses
 import shlex
 import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from ..fetch import Fetcher, signature_gap
 from ..geofabrik import PINNED, RegionFile
 from ..manifest.schema import ConverterTool, DerivedDataInstall, PackageManifest
+from ..payloads import payload_action, preflight_payloads
 from .base import Action, BackendError, Command, CommandRunner
 from .data import human_size
 from .regions import (
@@ -66,7 +68,17 @@ from .regions import (
 from .staging import REFUSED, Staging
 from .verified import PrefixWriter, digest_of
 
+if TYPE_CHECKING:
+    # Type-only: a module-level import of `hammunition.resolution` is not
+    # known to be free of #158's cycle, and the field only ever needs an
+    # annotation, which `from __future__ import annotations` defers.
+    from ..resolution import ResolutionContext
+
 Kind = Literal["map", "poi"]
+
+#: The explicit size check's cap above the manifest's declared bytes, as the
+#: shared payload fetch's other call sites use (D-070, #381 Task 13).
+MIB = 1024 * 1024
 
 #: osmosis's own entry point, the class ``/usr/bin/osmosis`` starts.
 MAIN = "org.openstreetmap.osmosis.core.Osmosis"
@@ -243,6 +255,9 @@ class MapsforgeConverter:
     privileged: bool | None = None
     osmosis_dir: Path = OSMOSIS_DIR
     java_dir: Path = JAVA_DIR
+    context: ResolutionContext | None = None
+    """The run's resolution context: offline, the pinned POI writer is
+    refused before any build step exists unless the Bunker can answer for it."""
 
     @property
     def suffix(self) -> str:
@@ -350,20 +365,46 @@ class MapsforgeConverter:
     def _tool_steps(
         self, manifest: PackageManifest, tool: ConverterTool, dest: Path
     ) -> list[Action | Command]:
+        if self.fetcher is None:
+            raise BackendError(f"{manifest.name}: the POI writer has no fetcher in this run")
+        if self.fetcher.offline and (self.context is None or not self.context.offline):
+            # preflight_payloads silently does nothing with no context, or
+            # with one that disagrees and says online (it treats either the
+            # same as "online"), so an offline run must refuse here itself
+            # rather than rely on that call to catch either mismatch.
+            raise BackendError(
+                f"{manifest.name}: offline, the pinned POI writer needs the Bunker's "
+                f"verified catalogue to check before any step runs, and this run has "
+                f"none. Nothing was planned."
+            )
+        # Offline, the Bunker is required to answer for the pinned writer
+        # before any step of this unit exists (D-070, #381 Task 13).
+        preflight_payloads(manifest.name, ((tool.artifact, tool.size),), context=self.context)
         fetched: dict[str, Path] = {}
         gap = signature_gap(tool.artifact)
-        return [
-            Action(
-                kind="fetch",
-                description=(
-                    f"Fetch the Mapsforge POI writer for {manifest.name} "
-                    f"({human_size(tool.size)}, {tool.licence}), checked by "
-                    f"{PINNED}"
-                    + (f"; its signature is recorded, and {manifest.name} {gap}" if gap else "")
-                ),
-                detail=f"{tool.artifact.url} (sha256 {tool.artifact.sha256[:12]}…, {tool.size} bytes)",
-                perform=partial(self._fetch_tool, tool, fetched),
+        fetch = payload_action(
+            manifest.name,
+            tool.artifact,
+            self.fetcher,
+            label="the Mapsforge POI writer",
+            expected_size=tool.size,
+            max_bytes=tool.size + MIB,
+            fetched=fetched,
+        )
+        # The mirror routing and the explicit size check come from the
+        # shared helper; the licence and signature-gap sentence are this
+        # unit's own disclosure and survive on top of it.
+        fetch = dataclasses.replace(
+            fetch,
+            description=(
+                f"Fetch the Mapsforge POI writer for {manifest.name} "
+                f"({human_size(tool.size)}, {tool.licence}), checked by "
+                f"{PINNED}"
+                + (f"; its signature is recorded, and {manifest.name} {gap}" if gap else "")
             ),
+        )
+        return [
+            fetch,
             Action(
                 kind="install-data",
                 description=f"Install the Mapsforge POI writer as {dest} (mode 0644)",
@@ -373,20 +414,6 @@ class MapsforgeConverter:
                 requires_root=self.writer.privileged,
             ),
         ]
-
-    def _fetch_tool(self, tool: ConverterTool, fetched: dict[str, Path]) -> str:
-        if self.fetcher is None:
-            raise BackendError("the POI writer has no fetcher in this run")
-        result = self.fetcher.fetch(tool.artifact)
-        if result.size != tool.size:
-            raise BackendError(
-                f"{tool.artifact.url}: the manifest declares {tool.size} bytes and the "
-                f"download is {result.size}; the digest matched, so the declaration is "
-                f"wrong -- fix the manifest, the plan printed a size that was not true"
-            )
-        fetched["path"] = result.path
-        where = "cached" if result.from_cache else "downloaded"
-        return f"{where} {result.size} bytes, sha256 {result.sha256[:12]}… verified"
 
     def _install_tool(self, tool: ConverterTool, fetched: dict[str, Path], dest: Path) -> str:
         path = fetched.get("path")

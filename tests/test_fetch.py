@@ -357,10 +357,13 @@ class _Bytes:
 
 @pytest.mark.parametrize("method", ["sha256", "md5"])
 def test_a_symlink_planted_at_the_temporary_is_refused_and_its_target_untouched(
-    tmp_path: Path, method: str
+    tmp_path: Path, method: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import hashlib
     import os
+    import secrets
+
+    monkeypatch.setattr(secrets, "token_hex", lambda nbytes=None: "0" * 16)
 
     body = b"map bytes"
     url = "https://download.geofabrik.de/x-260101.osm.pbf"
@@ -383,11 +386,13 @@ def test_a_symlink_planted_at_the_temporary_is_refused_and_its_target_untouched(
         def attempt() -> object:
             return fetcher.fetch_md5(url, md5, expected_size=len(body))
 
-    final.with_name(final.name + f".part.{os.getpid()}").symlink_to(victim)
+    planted = final.with_name(final.name + f".part.{os.getpid()}.{'0' * 16}")
+    planted.symlink_to(victim)
     with pytest.raises(BackendError, match="temporary"):
         attempt()
     assert victim.read_text() == "root:secret\n"
     assert not final.exists()
+    assert planted.is_symlink()  # exclusive creation refused it, so it is not ours to delete
 
 
 # ---------------------------------------------------------------------------

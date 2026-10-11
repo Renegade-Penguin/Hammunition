@@ -725,7 +725,8 @@ class StepView(Strict):
     sources: tuple[str, ...] = described(
         "for a data download (a `data` artifact, a map region, a terrain tile), the URLs it "
         "is fetched from in the order tried: the LAN mirror, then the publisher (D-070); "
-        "the publisher alone with no mirror; empty for any other step"
+        "the publisher alone with no mirror; the Bunker alone under `--offline`; empty for "
+        "any other step"
     )
     index: int = described("this step's 1-based position in execution order")
     long_running: bool = field(

@@ -117,22 +117,39 @@ class PublisherChecks:
         *,
         now: datetime | None = None,
         recheck: bool = False,
+        offline: bool = False,
     ) -> None:
         self.attributions = dict(attributions or {})
         self.now = now if now is not None else datetime.now(UTC)
         self.recheck = recheck
+        self.offline = offline
+        """Offline no publisher is asked about anything, whatever ``recheck`` says."""
         self.lines: list[CheckLine] = []
 
     @classmethod
     def from_log(
-        cls, log: _Readable, *, now: datetime | None = None, recheck: bool = False
+        cls,
+        log: _Readable,
+        *,
+        now: datetime | None = None,
+        recheck: bool = False,
+        offline: bool = False,
     ) -> PublisherChecks:
-        return cls(read_attributions(log), now=now, recheck=recheck)
+        return cls(read_attributions(log), now=now, recheck=recheck, offline=offline)
 
     def due(self, unit: str, item: str, path: Path, *, digest: str | None = None) -> bool:
         """Whether the item installed at *path* is asked of its publisher.
         Records the decision either way."""
         attribution = self.attributions.get(str(path))
+        if self.offline:
+            stamp = attribution.when.date().isoformat() if attribution is not None else None
+            return self._note(
+                unit,
+                item,
+                False,
+                "offline: the installed copy is kept; the publisher is not asked",
+                stamp,
+            )
         if attribution is None:
             reason = "on disk, not attributed in the log: its file counts, nothing is asked"
             return self._note(unit, item, False, reason, None)

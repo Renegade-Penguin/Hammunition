@@ -78,6 +78,9 @@ class StationDocument(Strict):
     reference_books: tuple[str, ...] = described(
         "Kiwix book ids chosen for kiwix-library (D-066); empty when none are chosen"
     )
+    mirror_require_hardware_key: bool = described(
+        "require an enrolled hardware signer for Bunker catalogues"
+    )
     mirror: str | None = described(
         "the LAN mirror the verified fetch tries before the publisher, the same digest "
         "checked either way (D-070); null when none is set"
@@ -137,6 +140,7 @@ def build_station(path: Path, station: Station) -> StationDocument:
         map_freshness=station.map_freshness,
         reference_books=station.reference_books,
         mirror=station.mirror,
+        mirror_require_hardware_key=station.mirror_require_hardware_key,
         rig=station.rig,
         rig_device=station.rig_device,
         rig_baud=station.rig_baud,
@@ -167,6 +171,7 @@ def render_station(doc: StationDocument) -> list[str]:
         and doc.map_freshness is None
         and not doc.reference_books
         and doc.mirror is None
+        and not doc.mirror_require_hardware_key
         and doc.dem_source == "copernicus"
         and doc.topo_radius_km == 100
         and not doc.topo_regions
@@ -196,6 +201,9 @@ def render_station(doc: StationDocument) -> list[str]:
     else:
         lines.append(f"  {'map regions':<14} (not set)")
     lines.append(f"  {'map freshness':<14} {doc.map_freshness or 'yearly'}")
+    lines.append(
+        f"  mirror_require_hardware_key {'yes' if doc.mirror_require_hardware_key else 'no'}"
+    )
     lines.append(f"  {'mirror':<14} {doc.mirror or '(not set)'}")
     lines.append(f"  {'dem_source':<14} {doc.dem_source}")
     lines.append(f"  {'topo radius':<14} {radius}")

@@ -39,6 +39,7 @@ from hammunition.geoclue import GeoClueState
 from hammunition.gpstime.mode import GPS_MODES
 from hammunition.gpstime.state import HOLDOVER_WARN_SECONDS, TimeState, format_duration
 from hammunition.hardware.gps_resume import ResumeStatus
+from hammunition.security_keys import SecurityKeyState
 
 #: routino-common's file QMapShack reads at startup (D-061).
 ROUTINO_TRANSLATIONS = "/usr/share/routino/translations.xml"
@@ -56,6 +57,7 @@ __all__ = [
     "Status",
     "rig_checks",
     "run_checks",
+    "security_key_checks",
     "summarize",
     "writable_or_creatable",
 ]
@@ -247,6 +249,73 @@ def rig_checks(status: RigStatus | None) -> list[Check]:
     return checks
 
 
+def security_key_checks(state: SecurityKeyState | None) -> list[Check]:
+    """Hardware signing readiness and enrolled key strength, read-only.  A12.
+
+    Pure: every fact is already in *state*, gathered by the CLI's probe. A
+    present FIDO2/PIV token is informational (not every operator wants one);
+    a *weak* enrolled key, or OpenSSH too old for `-sk` signing, is a warn."""
+    if state is None:
+        return []
+    out: list[Check] = []
+    fix = "hammunition install security-keys"
+    out.append(
+        Check(
+            "pcscd",
+            "ok" if state.pcscd_active else "warn",
+            "PC/SC daemon active" if state.pcscd_active else "PC/SC daemon inactive or unavailable",
+            fix if not state.pcscd_active else None,
+        )
+    )
+    for label, present in (("FIDO2 token", state.fido2_present), ("PIV token", state.piv_present)):
+        if present is None:
+            detail = "detection unavailable"
+        else:
+            detail = "detected" if present else "not detected"
+        out.append(Check(label, "info", detail))
+    ready = state.openssh is not None and state.openssh >= (8, 2)
+    out.append(
+        Check(
+            "OpenSSH signing",
+            "ok" if ready else "warn",
+            "OpenSSH supports -sk signing" if ready else "OpenSSH 8.2+ required for -sk signing",
+        )
+    )
+    for label, present, access in (
+        ("FIDO2 access", state.fido2_present, state.fido2_access),
+        ("PIV access", state.piv_present, state.piv_access),
+    ):
+        if not state.probed_as_operator:
+            out.append(
+                Check(
+                    label,
+                    "info",
+                    "user access unmeasured: run hammunition doctor as yourself, without sudo",
+                )
+            )
+        elif present or access is False:
+            out.append(
+                Check(
+                    label,
+                    "ok" if access else "warn",
+                    "token reachable without root"
+                    if access
+                    else "token access denied or unmeasured; inspect the archive's device rules",
+                )
+            )
+    for strength in state.enrolled:
+        out.append(
+            Check(
+                "Bunker key",
+                "info",
+                f"{strength.fingerprint}: {strength.algorithm}, {strength.bits} bits",
+            )
+        )
+        if strength.warning is not None:
+            out.append(Check("Bunker key strength", "warn", strength.warning))
+    return out
+
+
 def run_checks(
     *,
     target_describe: str | None,
@@ -283,6 +352,7 @@ def run_checks(
     launchers_shadowing: tuple[tuple[str, str], ...] = (),
     rig: RigStatus | None = None,
     geoclue_state: GeoClueState | None = None,
+    security_keys: SecurityKeyState | None = None,
 ) -> list[Check]:
     """Every check, in the order a person should read them. Pure; see module docstring."""
     checks: list[Check] = []
@@ -649,6 +719,7 @@ def run_checks(
         )
 
     checks.extend(rig_checks(rig))
+    checks.extend(security_key_checks(security_keys))
     return checks
 
 

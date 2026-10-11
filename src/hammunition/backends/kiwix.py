@@ -38,7 +38,7 @@ line for a parser of downloaded data).
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
 
@@ -47,6 +47,7 @@ from ..fetch import Fetcher, MirrorPath, fetch_disclosure, record_fetch
 from ..kiwix import BookFile, KiwixError, load_book_list, load_pin_file, resolve_books
 from ..manifest.schema import KiwixBooksInstall, PackageManifest, RemoteArtifact
 from ..progress import run_checks
+from ..resolution import CatalogueMiss, ResolutionContext
 from ..retry import OnOutage, PublisherUnavailable, hint_for
 from .base import Action, BackendError, Command, CommandRunner
 from .data import human_size
@@ -65,6 +66,16 @@ def book_mirror_path(unit: str, book: BookFile) -> MirrorPath:
     across Kiwix's republications; a stale copy there fails the pin's sha256
     and the publisher is asked instead."""
     return MirrorPath(unit, book.pin.id)
+
+
+def require_book(book: BookFile, unit: str, context: ResolutionContext) -> None:
+    """The Bunker's record for *book* agrees with the repository's own pin.
+
+    The pin is the repository's (size, then sha256); the record is never
+    compared with itself. A miss defers the whole book selection."""
+    name = book_mirror_path(unit, book).name
+    context.require_payload(unit, name, size=book.pin.size)
+    context.require_payload(unit, name, sha256=book.pin.sha256)
 
 
 def book_current(dest: Path, book: BookFile) -> bool:
@@ -125,6 +136,8 @@ class KiwixBooksBackend:
     """Remove nothing this run: a book or map was deferred because its publisher
     is not answering (#200), and the installed file it would have replaced
     must not be removed with nothing arriving in its place."""
+    provenance: Mapping[tuple[str, str], str] = field(default_factory=dict)
+    """What the Bunker's catalogue answered for (unit, book id): said on the fetch line."""
     method = "kiwix-books"
 
     def data_dir(self, manifest: PackageManifest) -> Path:
@@ -157,6 +170,11 @@ class KiwixBooksBackend:
                     description=(
                         f"Fetch reference book {pin.id} ({pin.published}, "
                         f"{human_size(pin.size)}, {book.book.licence}){note}"
+                        + (
+                            f"; {self.provenance[(manifest.name, pin.id)]}"
+                            if (manifest.name, pin.id) in self.provenance
+                            else ""
+                        )
                     ),
                     detail=f"{urls} (sha256 {pin.sha256[:12]}…, {pin.size} bytes)",
                     perform=partial(self._fetch, book, fetched, where, facts),
@@ -258,6 +276,8 @@ def resolve_station_books(
     head: Callable[[str], int],
     on_outage: OnOutage | None = None,
     checks: PublisherChecks | None = None,
+    context: ResolutionContext | None = None,
+    unit: str | None = None,
 ) -> list[BookFile]:
     """The chosen books as pinned files, checked before the plan prints.
 
@@ -274,7 +294,17 @@ def resolve_station_books(
     With *checks* (#197), an installed book the log attributes is not asked
     again until the attribution is a week old; a book that is asked and no
     longer served is a note in the plan, never a refusal.
+
+    With a *context* (#381), a book the publisher cannot be asked about is
+    answered by the Bunker's record, checked against the repository's own pin
+    (:func:`require_book`); *unit* (the catalogue key) is then required. A book
+    the Bunker cannot answer for, while a Bunker is verified, defers the whole
+    selection (:class:`~hammunition.resolution.CatalogueMiss`). Offline the
+    publisher is never asked, and a book installed at its pin needs no record
+    and no recheck.
     """
+    if context is not None and unit is None:
+        raise ValueError("resolve_station_books needs the unit name when given a context")
     books = resolve_books(selection, load_book_list(catalog_root), load_pin_file(catalog_root))
     problems: list[str] = []
     unavailable: set[str] = set()
@@ -284,24 +314,40 @@ def resolve_station_books(
         if status != 200:
             raise KiwixError(f"{book.pin.url} answered HTTP {status}, not 200")
 
-    recheck_installed(
-        checks,
-        installed.name,
-        [b for b in books if book_current(installed / b.pin.file, b)],
-        name=lambda book: book.pin.id,
-        path=lambda book: installed / book.pin.file,
-        check=still_served,
-        digest=lambda book: book.pin.sha256,
-        label="installed Kiwix books against download.kiwix.org",
-    )
+    if context is None or not context.offline:
+        recheck_installed(
+            checks,
+            installed.name,
+            [b for b in books if book_current(installed / b.pin.file, b)],
+            name=lambda book: book.pin.id,
+            path=lambda book: installed / book.pin.file,
+            check=still_served,
+            digest=lambda book: book.pin.sha256,
+            label="installed Kiwix books against download.kiwix.org",
+        )
     todo = [b for b in books if not book_current(installed / b.pin.file, b)]
-    outcomes = run_checks(
-        todo, lambda book: head(book.pin.url), label="Kiwix books against download.kiwix.org"
-    )
+
+    def served(book: BookFile) -> int:
+        if context is None or unit is None:
+            return head(book.pin.url)
+
+        def recorded() -> int:
+            require_book(book, unit, context)
+            return 200
+
+        return context.choose(
+            unit, book_mirror_path(unit, book).name, lambda: head(book.pin.url), recorded
+        )
+
+    outcomes = run_checks(todo, served, label="Kiwix books against download.kiwix.org")
     for book, outcome in zip(todo, outcomes, strict=True):
         try:
             status = outcome.get()
+        except CatalogueMiss:
+            raise
         except PublisherUnavailable as exc:
+            if context is not None and context.verified is not None:
+                raise CatalogueMiss(f"{book.pin.id}: no complete book set: {exc}") from exc
             if on_outage is None:
                 problems.append(f"  {book.pin.id}: {exc}")
             else:

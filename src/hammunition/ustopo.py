@@ -40,6 +40,7 @@ from typing import Protocol
 
 from . import s3etag
 from .copernicus import UNPINNED, Ring, S3Probe, TileProbe, squares_touching
+from .resolution import CatalogueMiss, ResolutionContext
 from .s3etag import MIB, etag_matches, part_sizes
 
 __all__ = [
@@ -267,7 +268,7 @@ def bucket_probe() -> S3Probe:
     return S3Probe(bucket=BUCKET)
 
 
-def check_quad(quad: Quad, probe: TileProbe) -> None:
+def _check_quad_online(quad: Quad, probe: TileProbe) -> None:
     """Refuse *quad* unless the bucket still serves it as the index says:
     status 200, the same size and the same ETag. A changed object is not
     fetched against a stale checksum."""
@@ -283,3 +284,41 @@ def check_quad(quad: Quad, probe: TileProbe) -> None:
             f"since the index was built, so it is not fetched against the old "
             f"checksum. {INDEX_REMEDY}"
         )
+
+
+def _recorded_quad(quad: Quad, context: ResolutionContext, unit: str) -> None:
+    """The Bunker's record for *quad*, compared with the carried index.
+
+    The index (the repository's own copy) is the independent side: the
+    record's publisher size, multipart-capable ETag and URL must equal it, so
+    the Bunker cannot move what the download is checked against. The bytes are
+    checked later, by the fetch (``Fetcher.fetch_etag`` against ``quad.etag``
+    and ``quad.size``), not here."""
+    context.require_payload(unit, quad.path, size=quad.size)
+    row = context.require_payload(unit, quad.path, publisher_digest=quad.etag)
+    if row.publisher_url != quad.url:
+        raise CatalogueMiss(f"{unit}/{quad.path}: publisher URL disagrees with the index")
+    if row.publisher_size is not None and row.publisher_size != quad.size:
+        raise CatalogueMiss(f"{unit}/{quad.path}: publisher size disagrees with the index")
+
+
+def check_quad(
+    quad: Quad,
+    probe: TileProbe,
+    *,
+    context: ResolutionContext | None = None,
+    unit: str | None = None,
+) -> None:
+    """:func:`_check_quad_online`, or with a *context* the Bunker's record when
+    the bucket cannot be asked. Nothing on *quad* is replaced: the download is
+    still checked against the index's ETag and size."""
+    if context is None:
+        return _check_quad_online(quad, probe)
+    if unit is None:
+        raise UstopoError("US Topo catalogue check needs its resolved unit name")
+    return context.choose(
+        unit,
+        quad.path,
+        lambda: _check_quad_online(quad, probe),
+        lambda: _recorded_quad(quad, context, unit),
+    )

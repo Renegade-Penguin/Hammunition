@@ -4,12 +4,15 @@
 
 The console is meant to configure and administer all of Hammunition (#323). This page is the count: every verb the CLI declares, read from its argparse tree, against the console screen that offers it. A verb with no screen names the issue that will add one. `tests/console/test_coverage.py` fails when the CLI gains a verb nobody classified, when a screen listed here does not mention its verb, and when the uncovered list grows.
 
-**21 covered, 31 not yet, 1 exempt, 53 verbs in all.**
+**21 covered, 34 not yet, 1 exempt, 56 verbs in all.**
 
 Covered here means a screen reads the verb's `--json` document or runs it in a pane after showing the exact command; the console holds no install logic and never answers a consent gate (D-021, D-059). It says nothing about how well the screen was exercised on hardware.
 
 | Verb | Console path |
 |---|---|
+| `hammunition mirror enrol` | no console path yet: Station (mirror), #323 |
+| `hammunition mirror status` | no console path yet: Station (mirror), #323 |
+| `hammunition mirror accept-older` | no console path yet: Station (mirror), #323 |
 | `hammunition list` | Install (`src/hammunition/console/screens/install.py`) |
 | `hammunition status` | Home (`src/hammunition/console/screens/home.py`) |
 | `hammunition update` | Update (`src/hammunition/console/screens/update.py`) |

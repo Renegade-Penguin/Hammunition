@@ -34,6 +34,7 @@ __all__ = [
     "render_topo_size_disclosure",
     "repo_env_var",
     "resolve_consent",
+    "resolve_mirror_consent",
     "resolve_repo_consent",
     "resolve_topo_size_consent",
 ]
@@ -378,3 +379,31 @@ def resolve_topo_size_consent(
     if not prompt(text):
         raise ConsentDeclined("the US Topo size was declined")
     return record(Decision.interactive)
+
+
+def resolve_mirror_consent(
+    fingerprint: str,
+    disclosure: str,
+    *,
+    prompt: Callable[[str], str] | None,
+    actor: str | None = None,
+    now: Callable[[], datetime] | None = None,
+) -> ConsentRecord:
+    if prompt is None:
+        raise ConsentUnavailable(
+            "Bunker enrolment requires typing a disclosed fingerprint at a terminal; --yes cannot answer it"
+        )
+    text = disclosure + f"\nType this fingerprint to trust it: {fingerprint}"
+    if prompt(text).strip() != fingerprint:
+        raise ConsentDeclined("Bunker signer fingerprint was not affirmed")
+    return ConsentRecord(
+        profile="bunker-signer",
+        decision=Decision.interactive,
+        risk_categories=(),
+        disclosure_text=text,
+        disclosure_sha256=hashlib.sha256(text.encode()).hexdigest(),
+        env_var="",
+        timestamp=(now or (lambda: datetime.now(UTC)))(),
+        actor=actor,
+        extra={"kind": "bunker_signer", "key_fingerprint": fingerprint},
+    )

@@ -40,16 +40,19 @@ refused by name so the gap stays visible (D-014).
 from __future__ import annotations
 
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from hammunition import netiso
 from hammunition.manifest.schema import (
     BinaryInstall,
     InstallBlock,
     PackageManifest,
     effective_binaries,
 )
+from hammunition.payloads import payload_action, payload_cached, preflight_payloads
 
 from .base import Action, BackendError, Command, CommandRunner
 from .placements import helper_steps, placement_steps
@@ -69,6 +72,8 @@ if TYPE_CHECKING:
     # `Fetcher` is only ever used in an annotation, which `from __future__
     # import annotations` defers, so it never needs a real import.
     from hammunition.fetch import Fetcher
+    from hammunition.manifest.schema import RemoteArtifact
+    from hammunition.resolution import ResolutionContext
 
 __all__ = ["IMPLEMENTED_BINARY_FORMATS", "BinaryBackend"]
 
@@ -95,6 +100,27 @@ class BinaryBackend:
 
     owner: str | None = None
     """The operator an installed tree is handed to (D-043); None keeps it root's."""
+
+    context: ResolutionContext | None = None
+    """The run's resolution context: offline, an artifact the Bunker cannot
+    answer for is refused before any extraction or install step exists."""
+
+    dependency_check: Callable[[Path], list[str]] | None = None
+    """Offline only: names the dependency groups of a fetched vendor .deb that no
+    suitable installed package meets (version included). apt would have to fetch
+    them from an archive the machine cannot reach, so the install stops first."""
+
+    isolation: str | None = None
+    """``netiso.BWRAP`` when the bwrap sandbox runs here, probed once at plan
+    time; offline a vendor .deb installs inside it (filesystem writable, but
+    /run, /tmp and the operator's home hidden) so its maintainer scripts and
+    triggers have no network and no pathname socket to bridge through; with
+    no working bwrap the install is refused."""
+
+    recommends_of: Callable[[Path], str] | None = None
+    """Offline only: the Recommends field of a vendor .deb that is local, as text,
+    so the plan can say which ones apt will NOT install (it runs with
+    ``--no-install-recommends``)."""
 
     attributed_files: frozenset[str] = frozenset()
     """The files the transaction log shows this engine installed, so a unit
@@ -140,24 +166,34 @@ class BinaryBackend:
                 f"quietly skipped."
             )
 
+        preflight_payloads(
+            manifest.name,
+            ((block.artifact, None),),
+            context=self.context,
+            cached=payload_cached(self.fetcher),
+        )
         fetched: dict[str, Path] = {}
-
-        def fetch() -> str:
-            result = self.fetcher.fetch(block.artifact)
-            fetched["path"] = result.path
-            where = "cached" if result.from_cache else "downloaded"
-            return f"{where} {result.size} bytes, sha256 {result.sha256[:12]}… verified"
-
         steps: list[Action | Command] = [
-            Action(
-                kind="fetch",
-                description=f"Fetch {manifest.name}",
-                detail=f"{block.artifact.url} (sha256 {block.artifact.sha256[:12]}…)",
-                perform=fetch,
+            payload_action(
+                manifest.name, block.artifact, self.fetcher, label="artifact", fetched=fetched
             )
         ]
 
         if block.format == "deb":
+            offline = self.context is not None and self.context.offline
+            if offline and self.isolation != netiso.BWRAP:
+                raise BackendError(self._no_sandbox(manifest.name))
+            local = payload_cached(self.fetcher)(block.artifact) if offline else False
+            if offline and self.dependency_check is not None:
+                steps.append(
+                    self._dependency_action(
+                        manifest.name,
+                        fetched,
+                        self.dependency_check,
+                        local=local,
+                        recommends_of=self.recommends_of,
+                    )
+                )
             # The path is not knowable until the fetch has run, so the install
             # is an Action that builds its own command rather than a Command
             # rendered at plan time. The plan still names the URL and digest
@@ -166,7 +202,7 @@ class BinaryBackend:
                 Action(
                     kind="install-deb",
                     description=f"Install {manifest.name} from the downloaded .deb",
-                    detail="apt-get install on the file, so its dependencies resolve",
+                    detail=self._install_detail(block.artifact, offline=offline, local=local),
                     perform=lambda: self._install_deb(manifest.name, fetched),
                     requires_root=True,
                 )
@@ -305,23 +341,107 @@ class BinaryBackend:
         )
         return steps
 
+    @staticmethod
+    def _no_sandbox(name: str) -> str:
+        return (
+            f"{name}: an offline vendor .deb install runs its maintainer scripts and "
+            f"triggers under apt, and needs the bwrap sandbox (no network, private /run, "
+            f"/tmp and the operator's home) to keep them off the host network, and this "
+            f"machine has none that works. Nothing was planned."
+        )
+
+    def _install_detail(self, artifact: RemoteArtifact, *, offline: bool, local: bool) -> str:
+        if not offline:
+            return "apt-get install on the file, so its dependencies resolve"
+        detail = (
+            "apt-get install on the file under bwrap (no network, private /run, /tmp and "
+            "the operator's home, so its maintainer scripts and triggers get no network and "
+            "no local socket to bridge through) with --no-install-recommends --no-download, "
+            "so apt can fetch nothing; "
+        )
+        if self.recommends_of is None:
+            return detail + "its Recommends are NOT installed offline"
+        if not local:
+            return (
+                detail + "its Recommends are NOT installed offline, and which ones is read "
+                "after the fetch (the package is not local yet)"
+            )
+        try:
+            recommends = self.recommends_of(self.fetcher.path_for(artifact))
+        except OSError as exc:
+            return detail + f"its Recommends are NOT installed offline (could not be read: {exc})"
+        if not recommends:
+            return detail + "the package has no Recommends"
+        return detail + f"Recommends NOT installed offline: {recommends}"
+
+    @staticmethod
+    def _dependency_action(
+        name: str,
+        fetched: dict[str, Path],
+        check: Callable[[Path], list[str]],
+        *,
+        local: bool,
+        recommends_of: Callable[[Path], str] | None,
+    ) -> Action:
+        def perform() -> str:
+            path = fetched.get("path")
+            if path is None:  # pragma: no cover - the fetch Action always runs first
+                raise BackendError(f"{name}: the .deb was not fetched before its dependency check")
+            unmet = check(path)
+            if unmet:
+                raise BackendError(
+                    f"offline: {name}'s .deb is installed by apt, which would fetch what it "
+                    f"depends on, and this machine lacks: {', '.join(unmet)}. Nothing was "
+                    f"installed."
+                )
+            outcome = "every dependency is met by an installed package"
+            if recommends_of is not None:
+                recommends = recommends_of(path)
+                if recommends:
+                    outcome += f"; Recommends not installed: {recommends}"
+            return outcome
+
+        when = (
+            ""
+            if local
+            else (
+                ", checked after the fetch (the package is not local to read yet); "
+                "nothing is installed if a dependency is missing"
+            )
+        )
+        return Action(
+            kind="check-deb-depends",
+            description=(
+                f"Check that {name}'s dependencies are installed (offline: apt cannot fetch "
+                f"them){when}"
+            ),
+            detail=f"the .deb's Depends against the installed packages, versions included{when}",
+            perform=perform,
+        )
+
     def _install_deb(self, name: str, fetched: dict[str, Path]) -> str:
-        """Hand the file to apt so its dependencies resolve."""
+        """Hand the file to apt so its dependencies resolve. Offline, apt may
+        neither install Recommends nor download anything."""
         path = fetched.get("path")
         if path is None:  # pragma: no cover - the fetch Action always runs first
             raise BackendError(f"{name}: the .deb was not fetched before the install step")
+        offline = self.context is not None and self.context.offline
+        if offline and self.isolation != netiso.BWRAP:
+            raise BackendError(self._no_sandbox(name))
+        apt_argv = (
+            "apt-get",
+            "-o",
+            "Acquire::Retries=3",
+            "install",
+            "--yes",
+            "--no-remove",
+            *(("--no-install-recommends", "--no-download") if offline else ()),
+            "--",
+            str(path),
+        )
         result = self.runner.run(
             Command(
-                argv=(
-                    "apt-get",
-                    "-o",
-                    "Acquire::Retries=3",
-                    "install",
-                    "--yes",
-                    "--no-remove",
-                    "--",
-                    str(path),
-                ),
+                argv=netiso.privileged_sandbox(apt_argv) if offline else apt_argv,
                 description=f"Install {name} from {path.name}",
                 env={"DEBIAN_FRONTEND": "noninteractive"},
                 requires_root=True,

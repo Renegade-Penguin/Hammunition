@@ -22,6 +22,8 @@ from typing import IO, Any
 
 import pytest
 
+from bunker_fixtures import artifact as catalogue_artifact
+from bunker_fixtures import make_context
 from fake_tools import calls, install_fakes
 from hammunition.backends import Action, Command
 from hammunition.backends.base import BackendError
@@ -35,9 +37,12 @@ from hammunition.backends.mapsforge import (
 )
 from hammunition.backends.regions import MapLedger
 from hammunition.backends.staging import Staging
-from hammunition.fetch import Fetcher
+from hammunition.fetch import Fetcher, mirror_url
 from hammunition.geofabrik import RegionFile
-from hammunition.manifest.schema import DerivedDataInstall, PackageManifest
+from hammunition.manifest.schema import DerivedDataInstall, PackageManifest, RemoteArtifact
+from hammunition.payloads import payload_path
+from hammunition.resolution import CatalogueMiss
+from test_fetch_mirror import Routes
 
 NOT_ROOT = 1000
 BODY = b"pbf" * 4
@@ -147,12 +152,15 @@ def _jars(root: Path, skip: frozenset[str] = frozenset()) -> tuple[Path, Path]:
 
 def _converter(tmp_path: Path, kind: str, files: list[RegionFile], **kw: Any) -> MapsforgeConverter:
     osmosis, java = kw.pop("dirs", None) or _jars(tmp_path)
+    fetcher = kw.pop("fetcher", None)
+    if fetcher is None:
+        fetcher = Fetcher(tmp_path / "cache", transport=kw.pop("transport", FakeTransport()))
     return MapsforgeConverter(
         kind=kind,  # type: ignore[arg-type]
         prefix=tmp_path,
         files=files,
         staging=Staging(tmp_path / "staging" / f"mapsforge-{kind}", euid=NOT_ROOT),
-        fetcher=Fetcher(tmp_path / "cache", transport=kw.pop("transport", FakeTransport())),
+        fetcher=fetcher,
         osmosis_dir=osmosis,
         java_dir=java,
         **kw,
@@ -269,6 +277,138 @@ def test_a_writer_that_does_not_hash_to_the_pin_is_refused(tmp_path: Path) -> No
     fetch = _actions(conv.steps(m, _block(m)))[0]
     with pytest.raises(BackendError, match="does not match the digest"):
         fetch.perform()
+
+
+def test_a_writer_of_the_wrong_declared_size_is_refused_before_install(tmp_path: Path) -> None:
+    """The digest matches, so the manifest's ``size`` is wrong: refuse before
+    the jar is ever installed under the prefix. Manifests are frozen, so the
+    wrong size is a copy of the real block, not a mutation of it."""
+    _install_region(tmp_path, DELAWARE)
+    conv = _converter(tmp_path, "poi", [DELAWARE])
+    m = manifest("poi")
+    block = _block(m)
+    assert block.tool is not None
+    wrong = block.model_copy(update={"tool": block.tool.model_copy(update={"size": len(JAR) + 1})})
+    fetch = _actions(conv.steps(m, wrong))[0]
+    with pytest.raises(BackendError, match=rf"manifest size {len(JAR) + 1}, got {len(JAR)}"):
+        fetch.perform()
+    jar = tmp_path / "share" / "hammunition" / "mapsforge-poi" / JAR_NAME
+    assert not jar.exists()
+
+
+# -- the POI writer tries the Bunker mirror first (#381, Task 14) ------------
+
+
+def test_the_poi_writer_tries_the_mirror_first(tmp_path: Path) -> None:
+    pin = RemoteArtifact(url=JAR_URL, sha256=JAR_SHA)
+    at = mirror_url("http://bunker.invalid", payload_path("mapsforge-poi", pin))
+    routes = Routes({at: JAR})
+    fetcher = Fetcher(
+        tmp_path / "cache",
+        transport=routes,
+        mirror_transport=routes,
+        mirror="http://bunker.invalid",
+    )
+    _install_region(tmp_path, DELAWARE)
+    conv = _converter(tmp_path, "poi", [DELAWARE], fetcher=fetcher)
+    m = manifest("poi")
+    fetch = _actions(conv.steps(m, _block(m)))[0]
+    assert fetch.sources == (at, JAR_URL)
+    fetch.perform()
+    assert routes.requested == [at]
+    assert fetch.facts["source"] == "mirror"
+
+
+def test_the_poi_writer_mirror_miss_falls_back_naming_why(tmp_path: Path) -> None:
+    pin = RemoteArtifact(url=JAR_URL, sha256=JAR_SHA)
+    at = mirror_url("http://bunker.invalid", payload_path("mapsforge-poi", pin))
+    routes = Routes({at: b"tampered", JAR_URL: JAR})
+    fetcher = Fetcher(
+        tmp_path / "cache",
+        transport=routes,
+        mirror_transport=routes,
+        mirror="http://bunker.invalid",
+    )
+    _install_region(tmp_path, DELAWARE)
+    conv = _converter(tmp_path, "poi", [DELAWARE], fetcher=fetcher)
+    m = manifest("poi")
+    fetch = _actions(conv.steps(m, _block(m)))[0]
+    outcome = fetch.perform()
+    assert routes.requested == [at, JAR_URL]
+    assert fetch.facts["source"] == "publisher"
+    assert "the mirror was passed over" in outcome
+
+
+def test_offline_the_poi_writer_preflight_refuses_before_any_build_step(tmp_path: Path) -> None:
+    """The Bunker lacking the pin refuses before ``steps()`` returns anything,
+    before a single region has been touched."""
+    _install_region(tmp_path, DELAWARE)
+    context = make_context(tmp_path / "ctx", [])
+    fetcher = Fetcher(
+        tmp_path / "cache", transport=Routes({}), offline=True, mirror="http://bunker.invalid"
+    )
+    conv = _converter(tmp_path, "poi", [DELAWARE], fetcher=fetcher, context=context)
+    m = manifest("poi")
+    with pytest.raises(CatalogueMiss, match="not on Bunker"):
+        conv.steps(m, _block(m))
+
+
+def test_offline_with_no_context_refuses_before_any_build_step(tmp_path: Path) -> None:
+    """A context-less offline run must refuse the same way an offline run
+    with an empty Bunker does: ``preflight_payloads`` silently does nothing
+    with no context, so this backend has to catch it itself."""
+    _install_region(tmp_path, DELAWARE)
+    fetcher = Fetcher(
+        tmp_path / "cache", transport=Routes({}), offline=True, mirror="http://bunker.invalid"
+    )
+    conv = _converter(tmp_path, "poi", [DELAWARE], fetcher=fetcher)
+    m = manifest("poi")
+    with pytest.raises(BackendError, match="offline") as exc:
+        conv.steps(m, _block(m))
+    assert "none. Nothing was planned" in str(exc.value)
+
+
+def test_a_context_that_disagrees_and_says_online_also_refuses(tmp_path: Path) -> None:
+    """The fetcher and the context are built from the same ``offline`` flag
+    in the real CLI, but this backend's API does not enforce that: a context
+    that exists but says ``offline=False`` while the fetcher says otherwise
+    is the same hole as no context at all -- ``preflight_payloads`` treats
+    both as "online" and does nothing."""
+    _install_region(tmp_path, DELAWARE)
+    context = make_context(tmp_path / "ctx", [], offline=False)
+    fetcher = Fetcher(
+        tmp_path / "cache", transport=Routes({}), offline=True, mirror="http://bunker.invalid"
+    )
+    conv = _converter(tmp_path, "poi", [DELAWARE], fetcher=fetcher, context=context)
+    m = manifest("poi")
+    with pytest.raises(BackendError, match="offline") as exc:
+        conv.steps(m, _block(m))
+    assert "none. Nothing was planned" in str(exc.value)
+
+
+def test_offline_the_poi_writer_preflight_passes_with_a_bunker_row(tmp_path: Path) -> None:
+    _install_region(tmp_path, DELAWARE)
+    row = catalogue_artifact("mapsforge-poi", f"{JAR_SHA}/{JAR_NAME}", JAR)
+    context = make_context(tmp_path / "ctx", [row])
+    fetcher = Fetcher(
+        tmp_path / "cache", transport=Routes({}), offline=True, mirror="http://bunker.invalid"
+    )
+    conv = _converter(tmp_path, "poi", [DELAWARE], fetcher=fetcher, context=context)
+    m = manifest("poi")
+    steps = conv.steps(m, _block(m))
+    assert _actions(steps)
+    assert ("mapsforge-poi", f"{JAR_SHA}/{JAR_NAME}") in context.notes
+
+
+def test_the_map_kind_never_preflights_anything(tmp_path: Path) -> None:
+    """The map converter names no ``tool``, so an empty, offline catalogue
+    plans it without complaint."""
+    _install_region(tmp_path, VERMONT)
+    context = make_context(tmp_path / "ctx", [])
+    conv = _converter(tmp_path, "map", [VERMONT], context=context)
+    m = manifest("map")
+    assert _actions(conv.steps(m, _block(m)))
+    assert context.notes == {}
 
 
 def test_current_regions_and_a_current_writer_mean_no_steps(

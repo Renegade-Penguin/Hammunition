@@ -12,6 +12,7 @@
   "reference_books": [
     "ham.stackexchange.com_en_all"
   ],
+  "mirror_require_hardware_key": false,
   "mirror": null,
   "rig": null,
   "rig_device": null,

@@ -60,6 +60,13 @@ def test_claude_md_and_the_changelog_carry_it() -> None:
     assert "D-070" in changelog[changelog.index("## Unreleased") :] + fragments
 
 
-def test_the_guide_says_the_plan_still_needs_the_internet() -> None:
+def test_the_guide_distinguishes_a_plain_mirror_from_an_enrolled_bunker() -> None:
+    """D-070's own plan is still made against the publishers; D-085 is the
+    narrower, deliberate exception, and only once its keys are enrolled.
+    The old blanket "a mirror does not make an install work offline" line is
+    no longer true now that an enrolled Bunker can (D-085); the guide must
+    say so without implying a bare `--mirror` grants it."""
     guide = _flat("docs/guides/lan-mirror.md")
-    assert "does not make an install work offline" in guide
+    assert "does not enrol keys or authorize using the mirror's metadata" in guide
+    assert "does not make an install work offline" not in guide
+    assert "hammunition mirror enrol" in guide and "--offline" in guide

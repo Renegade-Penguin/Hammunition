@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: Copyright (C) 2026 Renegade Penguin LLC
+# SPDX-License-Identifier: CC0-1.0
+
+name: pcscd
+version: 2.3.3
+summary: PC/SC smartcard daemon for PIV readers
+categories:
+- rfid
+install:
+- install:
+    method: apt
+    packages:
+    - pcscd
+    - libpcsclite1
+update:
+  probe:
+    method: apt_policy
+  strategy: apt_upgrade
+documentation:
+  what_it_does: Runs the service that applications use to talk to PC/SC smartcard
+    readers and PIV tokens.
+  why_you_want_it: It lets OpenSC and the SSH agent use a smartcard without each application
+    claiming the reader.
+  prerequisites: A PC/SC reader or PIV token. Check pcscd with systemctl status pcscd;
+    do not configure PAM.
+  known_problems: pcscd and libnfc can claim the same reader; stop the unused service
+    when they conflict.
+  upstream_url: https://pcsclite.apdu.fr/
+  upstream_support: https://github.com/LudovicRousseau/PCSC/issues

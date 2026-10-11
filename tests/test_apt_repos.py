@@ -121,6 +121,7 @@ def _plan(tmp_path: Path, repos: AptRepoBackend | None, **kwargs: Any) -> Any:
         apt=_apt(tmp_path, known),
         user="operator",
         repos=repos,
+        resolution_context=kwargs.pop("resolution_context", None),
     )
 
 
@@ -404,6 +405,18 @@ def test_no_backend_still_refuses_by_name(tmp_path: Path) -> None:
     with pytest.raises(PlanError) as excinfo:
         _plan(tmp_path, None)
     assert "no repository backend" in excinfo.value.blockers[0].reason
+
+
+def test_a_third_party_repository_is_refused_by_name_when_offline(tmp_path: Path) -> None:
+    from hammunition.resolution import ResolutionContext
+
+    with pytest.raises(PlanError) as excinfo:
+        _plan(tmp_path, _backend(tmp_path), resolution_context=ResolutionContext(offline=True))
+    blocker = excinfo.value.blockers[0]
+    assert blocker.subject == "editor"
+    assert "offline: it adds the apt repository vendor" in blocker.reason
+    online = _plan(tmp_path, _backend(tmp_path), resolution_context=ResolutionContext())
+    assert [a.repo.name for a in online.apt_repos] == ["vendor"]
 
 
 def test_an_absent_repository_is_added_when_apt_has_no_candidate(tmp_path: Path) -> None:

@@ -1,0 +1,40 @@
+# SPDX-FileCopyrightText: Copyright (C) 2026 Renegade Penguin LLC
+# SPDX-License-Identifier: CC0-1.0
+name: security-keys
+summary: Hardware signing keys and smartcard tools for your station
+stage: "1.0"
+packages: [pcscd, opensc, fido2-tools, yubikey-manager, libpam-u2f]
+documentation:
+  what_it_installs: >-
+    PC/SC and OpenSC for PIV smartcards, FIDO2 tools and their device-access
+    rules, YubiKey management tools and the U2F PAM module. All are from your
+    distribution's archive. Hammunition writes no PAM configuration; archive PAM
+    and debconf side effects are unmeasured across the target matrix.
+  why_together: >-
+    These provide the tools for signing a Bunker catalogue with a hardware key
+    and checking that the station can reach its token. FIDO2 is not tied to one
+    vendor; PIV signing uses OpenSSH through the agent and OpenSC.
+  deliberately_excludes: >-
+    Enabling PAM for login or sudo, changing account authentication, generating
+    keys or enrolling a Bunker automatically. PAM enablement is a separate task.
+  manual_configuration: >-
+    Run hammunition doctor, then enrol your Bunker with hammunition mirror enrol
+    URL. Generate or load your signing key with the token's tools. OpenSSH 8.2+
+    is needed. Ubuntu's ykman 5.2.1 support for newer PIV algorithms is unmeasured;
+    use the token's own tools if it cannot generate the required key. No PyPI
+    fallback is installed by this profile. Never publish your private key.
+  disk_footprint_hint: >-
+    Not measured for the complete dependency closure; apt's dry run reports what
+    your target needs. Do not treat installed package size as download size.
+  who_for: Operators using hardware signing keys or PIV smartcards with a Bunker.
+  hardware_assumed: A FIDO2 authenticator or PIV token to use the tools; none to install.
+  footprint_short: Not yet measured
+  excludes_short: PAM enablement and automatic key generation
+  goals:
+    - Sign and verify my Bunker's catalogue with a hardware key
+  first_ten_minutes:
+    - "Read the plan: `hammunition install security-keys --dry-run`."
+    - "Install with `hammunition install security-keys`; Hammunition writes no PAM files."
+    - "Connect your token and run `hammunition doctor` as yourself, without sudo."
+    - "Read [the Bunker catalogue reference](../reference/bunker-catalogue.md)."
+    - "Enrol with `hammunition mirror enrol URL`; type the fingerprint after checking it."

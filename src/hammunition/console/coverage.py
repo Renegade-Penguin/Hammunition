@@ -44,6 +44,9 @@ COVERED: dict[Verb, tuple[str, str]] = {
 
 # verb -> (issue that will add it, the screen planned)
 UNCOVERED: dict[Verb, tuple[str, str]] = {
+    ("mirror", "enrol"): ("#323", "Station (mirror)"),
+    ("mirror", "status"): ("#323", "Station (mirror)"),
+    ("mirror", "accept-older"): ("#323", "Station (mirror)"),
     ("maps", "qmapshack"): ("#323", "Maps"),
     ("maps", "splat"): ("#323", "Maps"),
     ("maps", "comaps"): ("#323", "Maps"),
@@ -84,4 +87,5 @@ EXEMPT: dict[Verb, str] = {
 
 # The uncovered count may fall and must never rise: a new verb is covered or
 # exempt, or this number is raised in a reviewed change that names the issue.
-MAX_UNCOVERED = 31
+# #381 adds three mirror verbs; their Station console paths are tracked by #323.
+MAX_UNCOVERED = 34

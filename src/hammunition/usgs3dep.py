@@ -43,6 +43,7 @@ from pathlib import Path
 from . import s3etag
 from .copernicus import CopernicusError, Square, TileProbe
 from .copernicus import square_of as copernicus_square
+from .resolution import CatalogueMiss, ResolutionContext
 
 __all__ = [
     "BUCKET",
@@ -149,7 +150,7 @@ def load_tile_list(path: Path) -> dict[str, TileRow]:
     return parse_tile_list(text)
 
 
-def check_tile(row: TileRow, probe: TileProbe) -> None:
+def _check_tile_online(row: TileRow, probe: TileProbe) -> None:
     """Refuse *row* unless the bucket still serves it as the list says:
     status 200, the same size and the same ETag."""
     url = tile_url(row.name)
@@ -162,3 +163,37 @@ def check_tile(row: TileRow, probe: TileProbe) -> None:
             f"carried list has {row.size} and {row.etag!r}; the object changed since the "
             f"list was built, so it is not fetched against the old checksum. {REMEDY}"
         )
+
+
+def _recorded_tile(row: TileRow, context: ResolutionContext, unit: str) -> None:
+    """The Bunker's record for *row*, compared with the carried list (the
+    independent side): size, the multipart-capable ETag and the URL. The bytes
+    are checked by the fetch (``Fetcher.fetch_etag`` against ``row.etag`` and
+    ``row.size``), not here."""
+    context.require_payload(unit, row.name, size=row.size)
+    found = context.require_payload(unit, row.name, publisher_digest=row.etag)
+    if found.publisher_url != tile_url(row.name):
+        raise CatalogueMiss(f"{unit}/{row.name}: publisher URL disagrees with the list")
+    if found.publisher_size is not None and found.publisher_size != row.size:
+        raise CatalogueMiss(f"{unit}/{row.name}: publisher size disagrees with the list")
+
+
+def check_tile(
+    row: TileRow,
+    probe: TileProbe,
+    *,
+    context: ResolutionContext | None = None,
+    unit: str | None = None,
+) -> None:
+    """:func:`_check_tile_online`, or with a *context* the Bunker's record when
+    the bucket cannot be asked. *row* is never replaced."""
+    if context is None:
+        return _check_tile_online(row, probe)
+    if unit is None:
+        raise CopernicusError("3DEP catalogue check needs its resolved unit name")
+    return context.choose(
+        unit,
+        row.name,
+        lambda: _check_tile_online(row, probe),
+        lambda: _recorded_tile(row, context, unit),
+    )

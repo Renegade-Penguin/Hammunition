@@ -375,6 +375,7 @@ class RegionsBackend:
     euid: int | None = None
     privileged: bool | None = None
     """Whether the prefix needs root; None decides from the path."""
+    provenance: Mapping[tuple[str, str], str] = field(default_factory=dict)
     method = "osm-regions"
 
     @property
@@ -457,6 +458,11 @@ class RegionsBackend:
                         f"Fetch map region {region.region} ({region.snapshot}, "
                         f"{human_size(region.size)}, {block.licence}) — {region.verified_by}"
                         f"{note}"
+                        + (
+                            f"; {self.provenance[(manifest.name, region.region)]}"
+                            if (manifest.name, region.region) in self.provenance
+                            else ""
+                        )
                     ),
                     detail=f"{urls} ({digest}, {region.size} bytes)",
                     perform=partial(self._fetch, region, fetched, where, facts),

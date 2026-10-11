@@ -43,6 +43,7 @@ from typing import TYPE_CHECKING
 from hammunition.backends.base import Action, BackendError, Command
 from hammunition.backends.source import SourceLayout, extract, patch_steps
 from hammunition.manifest.schema import NodeInstall, PackageManifest, RemoteArtifact
+from hammunition.payloads import payload_action, payload_cached, preflight_payloads
 
 if TYPE_CHECKING:
     # Type-only: `hammunition.backends/__init__.py` imports this module
@@ -51,6 +52,7 @@ if TYPE_CHECKING:
     # `Fetcher` is only ever used in an annotation, which `from __future__
     # import annotations` defers, so it never needs a real import.
     from hammunition.fetch import Fetcher
+    from hammunition.resolution import ResolutionContext
 
 __all__ = ["NodeBackend", "check_lockfile", "install_tree", "write_wrapper"]
 
@@ -188,8 +190,15 @@ class NodeBackend:
     """Plans node installs. Steps only — the runner executes them."""
 
     def __init__(
-        self, *, fetcher: Fetcher, build_root: Path, node_root: Path, bin_dir: Path
+        self,
+        *,
+        fetcher: Fetcher,
+        build_root: Path,
+        node_root: Path,
+        bin_dir: Path,
+        context: ResolutionContext | None = None,
     ) -> None:
+        self.context = context
         self.fetcher = fetcher
         self.build_root = build_root
         self.node_root = node_root
@@ -203,6 +212,13 @@ class NodeBackend:
 
     def steps(self, manifest: PackageManifest, block: NodeInstall) -> list[Action | Command]:
         artifact = block.artifact
+        # The source tarball only: a Node runtime is never fetched (D-037).
+        preflight_payloads(
+            manifest.name,
+            ((artifact, None),),
+            context=self.context,
+            cached=payload_cached(self.fetcher),
+        )
         layout = SourceLayout(root=self.build_root / f"{manifest.name}-{artifact.sha256[:8]}")
         src = layout.src
         tree = self.tree_for(manifest)
@@ -210,12 +226,7 @@ class NodeBackend:
         fetcher = self.fetcher
 
         steps: list[Action | Command] = [
-            Action(
-                kind="fetch",
-                description=f"Download and verify the {manifest.name} source archive",
-                detail=f"{artifact.url} -> {fetcher.path_for(artifact)} (sha256 verified)",
-                perform=partial(_fetch, fetcher, artifact),
-            ),
+            payload_action(manifest.name, artifact, fetcher, label="source archive"),
             Action(
                 kind="extract",
                 description=f"Unpack the {manifest.name} source",
@@ -300,12 +311,6 @@ class NodeBackend:
             ]
         )
         return steps
-
-
-def _fetch(fetcher: Fetcher, artifact: RemoteArtifact) -> str:
-    result = fetcher.fetch(artifact)
-    where = "cached" if result.from_cache else "downloaded"
-    return f"{where} {result.path.name}, sha256 verified"
 
 
 def _extract(fetcher: Fetcher, artifact: RemoteArtifact, dest: Path) -> str:

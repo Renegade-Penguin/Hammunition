@@ -61,6 +61,7 @@ their text follows.
 - `hammunition maps repeaters import`
 - `hammunition maps repeaters list`
 - `hammunition maps repeaters remove`
+- `hammunition mirror status`
 - `hammunition reference books`
 - `hammunition secrets status`
 - `hammunition self update` (with `--dry-run` only)
@@ -91,6 +92,7 @@ their text follows.
 | `infra` | [`InfraDocument`](#infra) |
 | `infra-removed` | [`InfraRemovedDocument`](#infra-removed) |
 | `logs` | [`LogsDocument`](#logs) |
+| `mirror` | [`MirrorDocument`](#mirror) |
 | `phone` | [`PhoneDocument`](#phone) |
 | `plan` | [`PlanDocument`](#plan) |
 | `profile` | [`ProfileDocument`](#profile) |
@@ -568,6 +570,8 @@ reason, never dropped.
 | `reference_books` | list of string | the `--reference-books` given (Kiwix book ids, D-066); empty when none |
 | `units` | list of string | the units listed, in order |
 | `artifacts` | list of [`ArtifactEntry`](#artifactentry) | one entry per artifact, deferred ones included |
+| `inputs` | list of [`InputEntry`](#inputentry) | selection inputs (Task 16) the regional units among `units` need: each region's outline and its four recorded selections, or a deferral; empty when no selected unit is regional |
+| `git_pins` | list of [`GitPinEntry`](#gitpinentry) | one entry per `git` install block among `units` (Task 16), its pinned revision for the Bunker to bundle; empty when no selected unit builds from git |
 
 #### `ArtifactEntry`
 
@@ -579,11 +583,50 @@ One remote artifact, or one the selection cannot list and why.
 | `name` | string or null | the artifact's stable name within the unit: a region path, a tile name, a data file's name, a Kiwix book id as the pin file names it. A LAN mirror serves it at `<mirror>/<unit>/<name>`. Null only for a deferred entry that covers the whole unit |
 | `url` | string or null | the publisher URL the engine itself fetches; null when deferred |
 | `check` | string or null | how the download is verified: `sha256` (pinned by Hammunition), `md5-publisher` (Geofabrik's published MD5), `etag-md5` (the Copernicus object's ETag), `sha1-publisher` (the SHA-1 and size in CoMaps' own map index at the pinned commit, carried in the catalog), `sha256-publisher` (no unit uses it today) or `unverified-zip` (the ACMA register: no digest exists, so the zip's own CRC-32s and the tables its reader needs are checked; D-074, amended 2026-10-01) or `unverified-fetch` (an on-request repeater list of unit `repeater-snapshots`: no digest, no licence stated by its publisher, only size and date can be checked; D-078); null when deferred |
-| `digest` | string or null | the expected digest, in hex, of the kind `check` names: the pin, or the publisher's checksum as the engine read it while resolving; null when deferred and for `unverified-zip` and `unverified-fetch`, which have none |
+| `digest` | string or null | the expected digest, in hex, of the kind `check` names: the pin, or the publisher's checksum as the engine read it while resolving -- for `etag-md5` the raw ETag, which is a bare 32 hex-digit MD5 for a single-part upload or `<hex>-<parts>` for a multipart one (see `part_size`), never stripped of its quotes or suffix; null when deferred and for `unverified-zip` and `unverified-fetch`, which have none |
 | `checksum_url` | string or null | where a publisher checksum is read: the `.md5` beside a Geofabrik file, or the tile URL whose `HEAD` carries the ETag; null for a pinned sha256 and when deferred |
 | `size` | integer or null | bytes, known before the fetch (for `unverified-zip` and `unverified-fetch`, the publisher's `HEAD` today: the file changes; null for `unverified-fetch` when the server states no length); null when deferred |
 | `licence` | string | the licence line the plan prints for the unit, or for a Kiwix book that book's own |
 | `deferred` | string or null | null, or why this artifact cannot be listed for this selection |
+| `part_size` | integer or null | ETag multipart part size in bytes, or null when not recorded |
+
+#### `InputEntry`
+
+One Bunker selection input (Task 16): the outline or the recorded
+selection text a stateless re-run of the engine's own codecs produces for
+one of `osm-regions`, `dem-copernicus`, `dem-3dep`, `usgs-ustopo` or
+`usfs-fstopo`'s regions. Never read from an installed record.
+
+| field | type | meaning |
+|---|---|---|
+| `kind` | string | one of the five Bunker input kinds |
+| `region` | string | explicitly requested Geofabrik region |
+| `name` | string | name within inputs/<kind>/, including region path |
+| `url` | string or null | publisher URL for an outline; null for locally derived selections |
+| `sha256` | string or null | sha256 of the exact content below; null when deferred |
+| `size` | integer or null | UTF-8 content size in bytes; null when deferred |
+| `content` | string or null | exact UTF-8 input bytes for the Bunker writer to store; null when deferred |
+| `deferred` | string or null | reason this input cannot be produced; null when available |
+
+#### `GitPinEntry`
+
+One git revision a `git` install block pins, for the Bunker to mirror
+as a verified bundle (Task 16, D-070, D-024). Recursive submodule
+bundles are not named here: the manifest carries only `submodules: bool`,
+and the Bunker's own writer enumerates the pinned gitlinks through
+:mod:`hammunition.gitbundles` after cloning, never guessed at listing
+time.
+
+| field | type | meaning |
+|---|---|---|
+| `unit` | string | git-bundles |
+| `name` | string | unit@repository-pinned-commit; diagnostic only when deferred |
+| `repo` | string | upstream repository the Bunker clones at this pin |
+| `ref` | string | repository manifest tag or commit ref |
+| `commit` | string or null | full repository commit, null for an unpinned tag |
+| `submodules` | boolean | writer must recursively enumerate pinned gitlinks and produce separate bundles |
+| `licence` | string | manifest licence field, carried verbatim |
+| `deferred` | string or null | why no verifiable bundle can be named |
 
 <details><summary>JSON Schema</summary>
 
@@ -678,6 +721,18 @@ One remote artifact, or one the selection cannot list and why.
             }
           ],
           "title": "Deferred"
+        },
+        "part_size": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Part Size"
         }
       },
       "required": [
@@ -692,6 +747,155 @@ One remote artifact, or one the selection cannot list and why.
         "deferred"
       ],
       "title": "ArtifactEntry",
+      "type": "object"
+    },
+    "GitPinEntry": {
+      "additionalProperties": false,
+      "description": "One git revision a `git` install block pins, for the Bunker to mirror\nas a verified bundle (Task 16, D-070, D-024). Recursive submodule\nbundles are not named here: the manifest carries only `submodules: bool`,\nand the Bunker's own writer enumerates the pinned gitlinks through\n:mod:`hammunition.gitbundles` after cloning, never guessed at listing\ntime.",
+      "properties": {
+        "unit": {
+          "title": "Unit",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "repo": {
+          "title": "Repo",
+          "type": "string"
+        },
+        "ref": {
+          "title": "Ref",
+          "type": "string"
+        },
+        "commit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Commit"
+        },
+        "submodules": {
+          "title": "Submodules",
+          "type": "boolean"
+        },
+        "licence": {
+          "title": "Licence",
+          "type": "string"
+        },
+        "deferred": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Deferred"
+        }
+      },
+      "required": [
+        "unit",
+        "name",
+        "repo",
+        "ref",
+        "commit",
+        "submodules",
+        "licence",
+        "deferred"
+      ],
+      "title": "GitPinEntry",
+      "type": "object"
+    },
+    "InputEntry": {
+      "additionalProperties": false,
+      "description": "One Bunker selection input (Task 16): the outline or the recorded\nselection text a stateless re-run of the engine's own codecs produces for\none of `osm-regions`, `dem-copernicus`, `dem-3dep`, `usgs-ustopo` or\n`usfs-fstopo`'s regions. Never read from an installed record.",
+      "properties": {
+        "kind": {
+          "title": "Kind",
+          "type": "string"
+        },
+        "region": {
+          "title": "Region",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Url"
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Sha256"
+        },
+        "size": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Size"
+        },
+        "content": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Content"
+        },
+        "deferred": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Deferred"
+        }
+      },
+      "required": [
+        "kind",
+        "region",
+        "name",
+        "url",
+        "sha256",
+        "size",
+        "content",
+        "deferred"
+      ],
+      "title": "InputEntry",
       "type": "object"
     }
   },
@@ -728,6 +932,22 @@ One remote artifact, or one the selection cannot list and why.
         "$ref": "#/$defs/ArtifactEntry"
       },
       "title": "Artifacts",
+      "type": "array"
+    },
+    "inputs": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/InputEntry"
+      },
+      "title": "Inputs",
+      "type": "array"
+    },
+    "git_pins": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/GitPinEntry"
+      },
+      "title": "Git Pins",
       "type": "array"
     }
   },
@@ -2448,6 +2668,220 @@ One run's log file.
 
 </details>
 
+### mirror
+
+Stored Bunker trust and station signature policy, without a network request.
+
+The serial and catalogue age describe the last verified metadata. With no
+enrolled Bunker, its identity and catalogue fields are null and keys are empty;
+the station hardware policy still applies to future enrolment.
+
+| field | type | meaning |
+|---|---|---|
+| `url` | string or null | enrolled mirror URL; null when no Bunker is enrolled |
+| `name` | string or null | enrolled Bunker name |
+| `mode` | string or null | personal or group mode as of enrolment -- a later verified catalogue can change its own mode without this field being refreshed to match (an Opus adversarial review of the whole branch, #381) |
+| `enrolment_id` | string or null | opaque group sharing id; not proof of laptop identity |
+| `accepted_serial` | integer or null | highest accepted serial, except explicit backup restoration |
+| `generated` | string or null | UTC generation time from the last verified catalogue |
+| `age_days` | integer or null | age of last verified metadata, without contacting the Bunker |
+| `require_hardware` | boolean | station hardware-signature policy, off by default |
+| `keys` | list of [`MirrorKeyView`](#mirrorkeyview) | enrolled key strength and hardware assertions |
+| `warnings` | list of string | weak-key and catalogue-age warnings |
+
+#### `MirrorKeyView`
+
+One enrolled Bunker signer, with measured strength and hardware origin.
+
+The advertised no-touch metadata is informational only; it never changes
+signature verification options.
+
+| field | type | meaning |
+|---|---|---|
+| `id` | string | SHA256 fingerprint of the enrolled public key |
+| `algorithm` | string | OpenSSH algorithm measured from the public key |
+| `bits` | integer | key size measured by ssh-keygen |
+| `hardware` | boolean | hardware by sk type or explicitly affirmed by the operator |
+| `no_touch_required` | boolean | advertised signature metadata; informational only |
+| `weak` | boolean | true for RSA of 2048 bits or fewer |
+| `warning` | string or null | shared weak-key warning, null for a strong key |
+
+<details><summary>JSON Schema</summary>
+
+```json
+{
+  "$defs": {
+    "MirrorKeyView": {
+      "additionalProperties": false,
+      "description": "One enrolled Bunker signer, with measured strength and hardware origin.\n\nThe advertised no-touch metadata is informational only; it never changes\nsignature verification options.",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "algorithm": {
+          "title": "Algorithm",
+          "type": "string"
+        },
+        "bits": {
+          "title": "Bits",
+          "type": "integer"
+        },
+        "hardware": {
+          "title": "Hardware",
+          "type": "boolean"
+        },
+        "no_touch_required": {
+          "title": "No Touch Required",
+          "type": "boolean"
+        },
+        "weak": {
+          "title": "Weak",
+          "type": "boolean"
+        },
+        "warning": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Warning"
+        }
+      },
+      "required": [
+        "id",
+        "algorithm",
+        "bits",
+        "hardware",
+        "no_touch_required",
+        "weak",
+        "warning"
+      ],
+      "title": "MirrorKeyView",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Stored Bunker trust and station signature policy, without a network request.\n\nThe serial and catalogue age describe the last verified metadata. With no\nenrolled Bunker, its identity and catalogue fields are null and keys are empty;\nthe station hardware policy still applies to future enrolment.",
+  "properties": {
+    "url": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Url"
+    },
+    "name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Name"
+    },
+    "mode": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Mode"
+    },
+    "enrolment_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Enrolment Id"
+    },
+    "accepted_serial": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Accepted Serial"
+    },
+    "generated": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Generated"
+    },
+    "age_days": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Age Days"
+    },
+    "require_hardware": {
+      "title": "Require Hardware",
+      "type": "boolean"
+    },
+    "keys": {
+      "items": {
+        "$ref": "#/$defs/MirrorKeyView"
+      },
+      "title": "Keys",
+      "type": "array"
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "url",
+    "name",
+    "mode",
+    "enrolment_id",
+    "accepted_serial",
+    "generated",
+    "age_days",
+    "require_hardware",
+    "keys",
+    "warnings"
+  ],
+  "title": "MirrorDocument",
+  "type": "object"
+}
+```
+
+</details>
+
 ### phone
 
 The phone files gathered into one folder with a SHA256SUMS, and the
@@ -3134,7 +3568,7 @@ One step, exactly as the real run performs it.
 | `argv` | list of string | the argv executed, escalation applied; empty for an in-process step |
 | `action` | string or null | the in-process step's kind (`fetch`, `extract`, ...); null for a command |
 | `requires_root` | boolean | whether it runs as root |
-| `sources` | list of string | for a data download (a `data` artifact, a map region, a terrain tile), the URLs it is fetched from in the order tried: the LAN mirror, then the publisher (D-070); the publisher alone with no mirror; empty for any other step |
+| `sources` | list of string | for a data download (a `data` artifact, a map region, a terrain tile), the URLs it is fetched from in the order tried: the LAN mirror, then the publisher (D-070); the publisher alone with no mirror; the Bunker alone under `--offline`; empty for any other step |
 | `index` | integer | this step's 1-based position in execution order |
 | `long_running` | boolean | true when the backend knows the step can take several minutes (a submodule fetch, a compile, a venv install, a node build); the text prints one fixed note under it and claims no duration (#270) |
 
@@ -7031,6 +7465,7 @@ and a grid square or a map region says where the station is.
 | `map_regions` | list of string | Geofabrik region paths carrying offline map data; empty when none are set |
 | `map_freshness` | string or null | how often map data is refreshed: yearly, monthly or latest; null means the yearly default applies |
 | `reference_books` | list of string | Kiwix book ids chosen for kiwix-library (D-066); empty when none are chosen |
+| `mirror_require_hardware_key` | boolean | require an enrolled hardware signer for Bunker catalogues |
 | `mirror` | string or null | the LAN mirror the verified fetch tries before the publisher, the same digest checked either way (D-070); null when none is set |
 | `rig` | string or null | the station's radio: a catalog device id or hamlib:<model>; null when not set (D-073) |
 | `rig_device` | string or null | the serial port the rig is reached on — the full by-id path, for the operator's own screen (the plan, doctor and status elide the serial); null when not set |
@@ -7117,6 +7552,10 @@ and a grid square or a map region says where the station is.
       },
       "title": "Reference Books",
       "type": "array"
+    },
+    "mirror_require_hardware_key": {
+      "title": "Mirror Require Hardware Key",
+      "type": "boolean"
     },
     "mirror": {
       "anyOf": [
@@ -7249,6 +7688,7 @@ and a grid square or a map region says where the station is.
     "map_regions",
     "map_freshness",
     "reference_books",
+    "mirror_require_hardware_key",
     "mirror",
     "rig",
     "rig_device",
@@ -8030,6 +8470,7 @@ Installed versus the catalog, as a report. Nothing runs (D-053).
 | `rebuild_command` | string or null | rebuilds every unit behind the pin; null when none |
 | `upstream_declared` | list of string | units whose probe would ask upstream |
 | `upstream` | list of [`UpstreamRowView`](#upstreamrowview) or null | the upstream comparison; null unless `--upstream` asked for it |
+| `offline` | string or null | present under `--offline`: that nothing was fetched, which Bunker and catalogue serial were verified, and whether the local trust state advanced; null otherwise |
 
 #### `UpdateRowView`
 
@@ -8333,6 +8774,18 @@ The catalog's pin against what upstream publishes (`--upstream` only).
         }
       ],
       "title": "Upstream"
+    },
+    "offline": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Offline"
     }
   },
   "required": [

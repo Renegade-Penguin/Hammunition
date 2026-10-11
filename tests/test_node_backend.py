@@ -66,6 +66,12 @@ def block(m: PackageManifest) -> NodeInstall:
 
 
 class StubFetcher:
+    offline = False
+    mirror = None
+
+    def sources_for(self, url: str, mirror: Any) -> tuple[tuple[str, str], ...]:
+        return (("publisher", url),)
+
     def __init__(self, root: Path) -> None:
         self.root = root
 

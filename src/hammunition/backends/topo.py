@@ -31,7 +31,7 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ..fetch import Fetcher
+from ..fetch import Fetcher, MirrorPath, fetch_disclosure, record_fetch
 from ..manifest.schema import PackageManifest, TopoQuadsInstall
 from ..topo_bound import bound_line, split_bound
 from ..ustopo import Quad, UstopoError, parse_row, render_row
@@ -192,15 +192,22 @@ class TopoQuadsBackend:
         steps: list[Action | Command] = []
         for quad in self.resolution.fetch:
             fetched: dict[str, str | Path] = {}
+            facts: dict[str, str] = {}
+            # The Bunker's name for a sheet is its state path, <ST>/<stem>_<date>
+            # (the index's own key, the one the offline plan resolves by).
+            where = MirrorPath(manifest.name, quad.path)
+            note, urls, sources = fetch_disclosure(self.fetcher, quad.url, where, "ETag")
             steps.append(
                 Action(
                     kind="fetch",
                     description=(
                         f"Fetch US Topo quad {quad.name} ({human_size(quad.size)}, "
-                        f"{block.licence}) — {quad.verified_by}"
+                        f"{block.licence}) — {quad.verified_by}{note}"
                     ),
-                    detail=f"{quad.url} (ETag {quad.etag}, {quad.size} bytes)",
-                    perform=partial(self._fetch, quad, fetched),
+                    detail=f"{urls} (ETag {quad.etag}, {quad.size} bytes)",
+                    perform=partial(self._fetch, quad, fetched, where, facts),
+                    sources=sources,
+                    facts=facts,
                 )
             )
             dest = out / f"{quad.name}{TIF}"
@@ -252,17 +259,28 @@ class TopoQuadsBackend:
             return f"wrote {record}; {no_quads_line(entry.region)}"
         return f"wrote {record}"
 
-    def _fetch(self, quad: Quad, fetched: dict[str, str | Path]) -> str:
+    def _fetch(
+        self,
+        quad: Quad,
+        fetched: dict[str, str | Path],
+        where: MirrorPath | None = None,
+        facts: dict[str, str] | None = None,
+    ) -> str:
         try:
-            result = self.fetcher.fetch_etag(quad.url, quad.etag, expected_size=quad.size)
+            result = self.fetcher.fetch_etag(
+                quad.url, quad.etag, expected_size=quad.size, mirror=where
+            )
         except (BackendError, OSError) as exc:
             return self.ledger.fail(quad_key(quad.name), f"{quad.name}: {exc}")
         fetched["path"] = result.path
         fetched["sha256"] = result.sha256
-        where = "cached" if result.from_cache else "downloaded"
+        source = record_fetch(
+            result, facts if facts is not None else {}, mirrored=bool(self.fetcher.mirror)
+        )
+        state = "cached" if result.from_cache else "downloaded"
         return (
-            f"{where} {result.size} bytes, ETag {quad.etag} reproduced "
-            f"(the publisher's, not pinned)"
+            f"{state} {result.size} bytes, ETag {quad.etag} reproduced "
+            f"(the publisher's, not pinned){source}"
         )
 
     def _install(

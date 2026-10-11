@@ -49,6 +49,8 @@ from typing import Protocol
 
 import yaml
 
+from hammunition.resolution import CatalogueMiss, ResolutionContext
+
 BUCKET = "https://copernicus-dem-30m.s3.amazonaws.com"
 PINNED = "sha256, pinned by Hammunition"
 UNPINNED = "MD5 from the publisher's object metadata; not pinned by Hammunition"
@@ -511,7 +513,7 @@ class S3Probe:
             return response.status, size, response.headers.get("ETag")
 
 
-def resolve_tile(name: str, *, pins: Mapping[str, TilePin], probe: TileProbe) -> TileFile:
+def _resolve_tile_online(name: str, *, pins: Mapping[str, TilePin], probe: TileProbe) -> TileFile:
     """*name* as a verifiable download: from its pin, asking nothing, or from
     the bucket's ``HEAD`` -- its size and its ETag's MD5.
 
@@ -539,3 +541,59 @@ def resolve_tile(name: str, *, pins: Mapping[str, TilePin], probe: TileProbe) ->
             f"(scripts/gen_copernicus_pins.py)"
         )
     return TileFile(name, url, size, None, match.group(1))
+
+
+def recorded_tile(
+    name: str, *, unit: str, pins: Mapping[str, TilePin], context: ResolutionContext
+) -> TileFile:
+    """*name* from the verified catalogue, without asking the bucket.
+
+    A repository pin wins: the Bunker's copy must carry the pinned sha256 and
+    size. Otherwise the record must be this bucket's own object, named for
+    the tile, with a single-part MD5 (a multipart ETag is not a digest of the
+    object) and a publisher size equal to the stored size."""
+    url = tile_url(name)
+    pin = pins.get(name)
+    if pin is not None:
+        context.require_payload(unit, name, sha256=pin.sha256, size=pin.size)
+        return TileFile(name, url, pin.size, pin.sha256, None)
+    row = context.entry(unit, name)
+    if row.publisher_url != url or row.publisher_name != f"{name}.tif":
+        raise CatalogueMiss(f"{unit}/{name}: publisher URL/name disagree with the tile")
+    if row.publisher_size is None or row.publisher_size <= 0 or row.publisher_size != row.size:
+        raise CatalogueMiss(f"{unit}/{name}: publisher size is missing or disagrees")
+    digest = row.publisher_digest or ""
+    if row.publisher_check != "etag-md5" or _ETAG.fullmatch(digest) is None:
+        raise CatalogueMiss(f"{unit}/{name}: publisher_digest is not a single-part MD5")
+    context.require_payload(
+        unit,
+        name,
+        sha256=row.sha256,
+        size=row.publisher_size,
+        publisher_digest=row.publisher_digest,
+    )
+    return TileFile(name, url, row.publisher_size, None, digest.strip('"'))
+
+
+def resolve_tile(
+    name: str,
+    *,
+    pins: Mapping[str, TilePin],
+    probe: TileProbe,
+    context: ResolutionContext | None = None,
+    unit: str | None = None,
+) -> TileFile:
+    """:func:`_resolve_tile_online`, or with a *context* the Bunker's record
+    when the bucket cannot be asked (offline, or its retries spent). *unit* is
+    the dem-tiles manifest's name, the catalogue key; it is required with a
+    context and never inferred."""
+    if context is None:
+        return _resolve_tile_online(name, pins=pins, probe=probe)
+    if unit is None:
+        raise ValueError("resolve_tile needs the unit name when given a context")
+    return context.choose(
+        unit,
+        name,
+        lambda: _resolve_tile_online(name, pins=pins, probe=probe),
+        lambda: recorded_tile(name, unit=unit, pins=pins, context=context),
+    )

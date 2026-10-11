@@ -129,7 +129,16 @@ def test_staging_copies_the_fetched_file_readable_and_not_executable(
     monkeypatch.setattr(
         backend.fetcher,
         "fetch",
-        lambda artifact: SimpleNamespace(path=fetched, from_cache=True, size=11, sha256=SHA),
+        lambda artifact, **options: SimpleNamespace(
+            path=fetched,
+            from_cache=True,
+            size=11,
+            sha256=SHA,
+            source="cache",
+            warning=None,
+            url=None,
+            mirror_failure=None,
+        ),
     )
     fetch.perform()
     prepare.perform()

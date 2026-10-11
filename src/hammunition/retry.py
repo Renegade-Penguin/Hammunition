@@ -42,6 +42,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
+from hammunition.catalogue import PublisherUnavailable as PublisherUnavailable
+
 from .progress import say
 
 __all__ = [
@@ -86,24 +88,6 @@ OUTAGE_HINT = (
 def hint_for(refused: Sequence[str]) -> str:
     """:data:`OUTAGE_HINT` on its own line when any refusal is an outage."""
     return f"\n{OUTAGE_HINT}" if any("not answering right now" in r for r in refused) else ""
-
-
-class PublisherUnavailable(OSError):
-    """A publisher did not answer a probe after every retry.
-
-    ``answer`` is the last thing it said (``HTTP 503 Service Unavailable``,
-    ``timed out``); ``attempts`` how many times it was asked."""
-
-    def __init__(self, url: str, answer: str, attempts: int) -> None:
-        self.url = url
-        self.host = urllib.parse.urlsplit(url).hostname or url
-        self.answer = answer
-        self.attempts = attempts
-        tries = f"{attempts} attempt{'s' if attempts != 1 else ''}"
-        super().__init__(
-            f"{url}: the publisher is not answering right now (its last answer after "
-            f"{tries}: {answer})"
-        )
 
 
 def transient_answer(exc: BaseException) -> str | None:

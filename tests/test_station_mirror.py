@@ -37,6 +37,47 @@ def test_a_mirror_url_is_kept_as_given(url: str) -> None:
     assert Station(mirror=url).mirror == url
 
 
+@pytest.mark.parametrize(
+    "url", ["file:///srv/bunker", "file:///srv/bunker/", "file:///srv/my%20bunker/export"]
+)
+def test_a_file_export_is_a_mirror_as_given(url: str) -> None:
+    assert Station(mirror=url).mirror == url
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "file://other-host/srv/bunker",
+        "file://user@/srv/bunker",
+        "file://localhost/srv/bunker",
+        "file:relative/bunker",
+        "file://",
+        "file:///",
+        "file:///srv/../etc",
+        "file:///srv/./bunker",
+        "file:///srv/%2e%2e/etc",
+        "file:///srv/%2E/bunker",
+        "file:///srv/bunker?x=1",
+        "file:///srv/bunker#top",
+        "file:///srv/bun ker",
+        "file:///srv/bun%00ker",
+        "file:///srv/bun\x00ker",
+    ],
+)
+def test_a_malformed_file_mirror_is_refused(bad: str) -> None:
+    with pytest.raises(StationError, match="mirror"):
+        Station(mirror=bad)
+
+
+def test_the_publisher_transport_still_refuses_file() -> None:
+    from hammunition.backends import BackendError
+    from hammunition.fetch import ALLOWED_SCHEMES, UrllibTransport
+
+    assert frozenset({"http", "https"}) == ALLOWED_SCHEMES
+    with pytest.raises(BackendError, match="only"), UrllibTransport().open("file:///etc/passwd"):
+        pass
+
+
 def test_whitespace_around_a_mirror_is_dropped() -> None:
     assert Station(mirror=f"  {MIRROR} ").mirror == MIRROR
 
@@ -45,7 +86,6 @@ def test_whitespace_around_a_mirror_is_dropped() -> None:
     "bad",
     [
         "ftp://bunker.lan/",
-        "file:///srv/bunker",
         "bunker.lan:8080",
         "http://",
         "http://user:secret@bunker.lan/",

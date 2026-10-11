@@ -10804,3 +10804,24 @@ neither re-implements the other's half.
 paragraph states the policy in one sentence; `docs/hardware/uconsole.md`
 points at the epic. The `uconsole` profile named in SCOPE since D-003 is
 defined as part of #372. Nothing in the engine changes under this decision.
+
+## D-085 — A signed Bunker catalogue permits planning with publishers unreachable
+
+A Bunker's signed catalogue lets the engine plan and install with publishers unreachable;
+a signature records what the Bunker saw and never upgrades trust; hardware
+keys are recommended, never required.
+
+Amends D-070: planning no longer requires publishers when a Bunker is enrolled.
+Amends D-078: `share` decides what a group Bunker hands to whom.
+
+The engine verifies the exact catalogue bytes with enrolled OpenSSH keys, remembers
+the highest accepted serial, refuses rollback until `hammunition mirror accept-older`
+is explicitly confirmed, and warns on catalogues older than 30 days. Repository
+pins remain authoritative; publisher digests are the Bunker's recorded observations;
+digest-less data retains its existing disclosure and consent. RSA of 2048 bits or
+fewer is accepted with the shared weak-key warning. Hardware-only verification is an
+operator policy, off by default. Non-sk hardware origin requires operator affirmation.
+
+Hammunition writes no PAM configuration when installing `security-keys`; archive package side effects are unmeasured across the target matrix. Enabling token login or sudo requires
+a separate reviewed step with typed consent, dry-run and a working fallback login
+check before anything is written; that step is outside phase 1.

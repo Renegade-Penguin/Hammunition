@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: Copyright (C) 2026 Renegade Penguin LLC
+# SPDX-License-Identifier: CC0-1.0
+
+name: opensc
+version: 0.26.1
+summary: Smartcard and PKCS#11 tools for hardware signing
+categories:
+- rfid
+install:
+- install:
+    method: apt
+    packages:
+    - opensc
+update:
+  probe:
+    method: apt_policy
+  strategy: apt_upgrade
+documentation:
+  what_it_does: Provides smartcard utilities and a PKCS#11 module that OpenSSH can
+    load through ssh-agent.
+  why_you_want_it: It is the PIV route for signing with a card instead of leaving
+    an exportable private key on disk.
+  prerequisites: A supported smartcard and running pcscd. Load its PKCS#11 module
+    into your agent yourself.
+  known_problems: Token algorithm support differs by firmware and driver. A reader
+    being listed does not prove a signing key is usable.
+  upstream_url: https://github.com/OpenSC/OpenSC
+  upstream_support: https://github.com/OpenSC/OpenSC/issues

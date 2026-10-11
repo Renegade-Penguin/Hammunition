@@ -14,6 +14,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .backends.base import CommandRunner
 from .backends.derived import Converter
@@ -24,6 +25,9 @@ from .fetch import Fetcher
 from .geofabrik import RegionFile
 from .manifest.schema import DerivedDataInstall
 from .plan import InstallPlan
+
+if TYPE_CHECKING:
+    from .resolution import ResolutionContext
 
 
 @dataclass(frozen=True)
@@ -92,6 +96,7 @@ def build_phone_run(
     files: Sequence[RegionFile],
     keep: frozenset[str],
     regions: MapLedger,
+    context: ResolutionContext | None = None,
 ) -> PhoneRun:
     """Both phone converters for one run, each staging as the operator."""
     ledger = PhoneLedger()
@@ -107,6 +112,7 @@ def build_phone_run(
             regions=regions,
             ledger=ledger,
             runner=runner,
+            context=context,
         )
 
     return PhoneRun(ledger=ledger, map=converter("map"), poi=converter("poi"))

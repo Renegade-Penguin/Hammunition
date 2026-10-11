@@ -4,7 +4,7 @@
 
 Every piece of software in the catalog, one page each. Generated from `catalog/packages/` by `scripts/gen_package_reference.py` — it cannot drift from what the engine would actually install, because it is the same data.
 
-**327 packages** across **56 categories**. Categories are flat tags (**D-003**): they overlap freely and never nest, so most packages appear under more than one.
+**332 packages** across **56 categories**. Categories are flat tags (**D-003**): they overlap freely and never nest, so most packages appear under more than one.
 
 ## By category
 
@@ -473,16 +473,21 @@ Research tooling whose lawful use is jurisdiction-dependent; installed only thro
 - [hacktv](hacktv.md) — Generates and transmits analogue television — a HackRF as a TV station
 - [tempest-for-eliza](tempest-for-eliza.md) — Makes a monitor radiate music on an AM radio — a TEMPEST demonstration
 
-### `rfid` — 6
+### `rfid` — 11
 
 Proxmark3, libnfc, MIFARE key recovery and smartcard reader checks.
 
+- [fido2-tools](fido2-tools.md) — FIDO2 authenticator discovery and management tools
 - [libfreefare-bin](libfreefare-bin.md) — Tools for MIFARE DESFire, Ultralight and Classic over libnfc
 - [libnfc-bin](libnfc-bin.md) — Command-line tools for PN53x-based NFC readers
+- [libpam-u2f](libpam-u2f.md) — U2F PAM module installed without enabling token login
 - [mfcuk](mfcuk.md) — MIFARE Classic key recovery with no known key — the slow path
 - [mfoc](mfoc.md) — Key recovery for MIFARE Classic cards with at least one known key
+- [opensc](opensc.md) — Smartcard and PKCS#11 tools for hardware signing
 - [pcsc-tools](pcsc-tools.md) — Smartcard reader diagnostics — is the reader even working?
+- [pcscd](pcscd.md) — PC/SC smartcard daemon for PIV readers
 - [proxmark3](proxmark3.md) — Client and firmware tooling for the Proxmark3 RFID and NFC research device
+- [yubikey-manager](yubikey-manager.md) — YubiKey FIDO2 and PIV management utility
 
 ### `rig-control` — 15
 
@@ -813,6 +818,7 @@ The machine the station runs on rather than the radio: editors, multiplexers, ve
 | [faa-nasr-airports](faa-nasr-airports.md) | The FAA's airport, heliport and seaplane base list (NASR), for the infrastructure layers | data |
 | [fbb](fbb.md) | The classic packet radio BBS and mailbox | apt |
 | [fccexam](fccexam.md) | Practice tests for the US FCC commercial radio licence exams | apt |
+| [fido2-tools](fido2-tools.md) | FIDO2 authenticator discovery and management tools | apt |
 | [fl-moxgen](fl-moxgen.md) | Designs Moxon rectangle antennas and prints them to scale | source |
 | [flaa](flaa.md) | Drives a RigExpert antenna analyser from the desktop | source |
 | [flamp](flamp.md) | Sends files over radio in numbered blocks that can be filled in later | apt |
@@ -896,6 +902,7 @@ The machine the station runs on rather than the radio: editors, multiplexers, ve
 | [libiio-utils](libiio-utils.md) | Command-line tools that find and talk to IIO devices such as the PlutoSDR and ADALM2000 | apt |
 | [libmirisdr4](libmirisdr4.md) | Open driver for Mirics-based receivers, including SDRplay RSP hardware | apt |
 | [libnfc-bin](libnfc-bin.md) | Command-line tools for PN53x-based NFC readers | apt |
+| [libpam-u2f](libpam-u2f.md) | U2F PAM module installed without enabling token login | apt |
 | [librevna](librevna.md) | The PC program for the LibreVNA, an open-hardware 6 GHz vector network analyser | git |
 | [limesuite](limesuite.md) | Host tools and library for LimeSDR hardware | apt |
 | [linbpq](linbpq.md) | BPQ32 packet-radio node, BBS and Winlink gateway | git |
@@ -937,6 +944,7 @@ The machine the station runs on rather than the radio: editors, multiplexers, ve
 | [openfpgaloader](openfpgaloader.md) | Universal bitstream loader for FPGAs, over JTAG and SPI | apt |
 | [openhamclock](openhamclock.md) | Community continuation of HamClock as a browser dashboard — grey line, propagation, spots, satellites | node |
 | [openocd](openocd.md) | On-chip debugging and in-system programming over JTAG and SWD | apt |
+| [opensc](opensc.md) | Smartcard and PKCS#11 tools for hardware signing | apt |
 | [osm-garmin](osm-garmin.md) | Garmin maps of your OpenStreetMap regions, with trails, for QMapShack | derived |
 | [osm-navit](osm-navit.md) | Navit's binary maps, converted from your OpenStreetMap regions, and its configuration | derived |
 | [osm-pmtiles](osm-pmtiles.md) | Vector-tile maps of your OpenStreetMap regions, for the offline browser map | derived |
@@ -947,6 +955,7 @@ The machine the station runs on rather than the radio: editors, multiplexers, ve
 | [pat](pat.md) | Winlink client — radio email that works when the internet does not | apt |
 | [pciutils](pciutils.md) | lspci — for the SDRs and capture cards that are not on USB | apt |
 | [pcsc-tools](pcsc-tools.md) | Smartcard reader diagnostics — is the reader even working? | apt |
+| [pcscd](pcscd.md) | PC/SC smartcard daemon for PIV readers | apt |
 | [picocom](picocom.md) | The minimal terminal-native serial console | apt |
 | [pihpsdr](pihpsdr.md) | Operator program for OpenHPSDR transceivers -- ANAN, Hermes Lite 2 and their kin | git |
 | [pipx](pipx.md) | Installs Python applications in their own environments, on the PATH | apt |
@@ -1064,4 +1073,5 @@ The machine the station runs on rather than the radio: editors, multiplexers, ve
 | [xygrib](xygrib.md) | Views GRIB weather files — wind, pressure, waves, on a map | apt |
 | [yaac](yaac.md) | Yet Another APRS Client — the deep, portable Java one | binary |
 | [yagiuda](yagiuda.md) | Analyse and optimise Yagi-Uda arrays without writing a NEC model | apt |
+| [yubikey-manager](yubikey-manager.md) | YubiKey FIDO2 and PIV management utility | apt |
 | [z8530-utils2](z8530-utils2.md) | Configures Z8530-based HDLC cards for high-speed packet | apt |
