@@ -184,16 +184,19 @@ jobs:
       - name: Run the test suite inside the target
         # The offline source-build and vendor-.deb sandboxes (#381) run real
         # bwrap, which needs to create its own nested user namespace.
-        # seccomp=unconfined alone measured insufficient (2026-10-10): the
-        # container's default capability set still lacked what bwrap needed
-        # to set up that namespace's loopback interface. --cap-add=SYS_ADMIN
-        # grants it. Nothing else about the container's confinement (the
-        # read-only build it runs inside bwrap, network) changes, and the
-        # capability-matrix and mypy steps below keep the default profile --
-        # only the step that actually exercises bwrap needs either flag.
+        # seccomp=unconfined alone measured insufficient (2026-10-10), and so
+        # did adding --cap-add=SYS_ADMIN on top of it: both left the same
+        # "no working bwrap sandbox" failure. Ubuntu 24.04 (this runner's own
+        # OS) restricts unprivileged user-namespace creation through AppArmor
+        # by default, independently of seccomp and capabilities -- the third
+        # mechanism, measured next. Nothing else about the container's
+        # confinement (the read-only build it runs inside bwrap, network)
+        # changes, and the capability-matrix and mypy steps below keep every
+        # default -- only the step that actually exercises bwrap needs any
+        # of this.
         run: |
-          podman run --rm --security-opt seccomp=unconfined --cap-add=SYS_ADMIN \
-            "hammunition-$TARGET:ci" python -m pytest
+          podman run --rm --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
+            --cap-add=SYS_ADMIN "hammunition-$TARGET:ci" python -m pytest
 
       - name: mypy --strict on the target's own Python
         run: |
