@@ -135,13 +135,16 @@ documentation:
     transmits until you attach and configure one; on a network, the
     AutoInterface announces on every link-local interface from the first start.
   known_problems: >-
-    **An existing pip or pipx Reticulum is overwritten.** If Reticulum was
-    installed with pip or pipx, the engine's wrappers replace
-    `~/.local/bin/rnsd` and the other commands, and a pipx install can be
-    damaged through its symlink (issue #288; the engine does not yet check who
-    wrote a `~/.local/bin` entry). Remove it first: `pipx uninstall rns` or
-    `python3 -m pip uninstall rns`. Uninstalling this unit does not bring the
-    old one back.
+    **An existing pip or pipx Reticulum blocks the install, by name.** If
+    Reticulum was installed with pip or pipx, `~/.local/bin/rnsd` and the other
+    commands are already taken (pipx leaves symlinks into its own venv). The
+    plan names every command it would collide with and refuses the whole
+    transaction before anything runs; it never replaces or writes through
+    them (issue #288, D-022). Remove the old install
+    (`pipx uninstall rns` or `python3 -m pip uninstall rns`), or move the
+    files aside, and run the install again. Uninstalling this unit does not
+    bring the old one back. A wrapper this engine wrote earlier is recognised
+    by its header and re-installed over without fuss.
 
     **The licence is not an OSI licence.** The Reticulum License is the MIT
     text plus two added conditions, quoted from upstream's LICENSE (read

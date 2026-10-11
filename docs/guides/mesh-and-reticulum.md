@@ -150,12 +150,15 @@ wheel's metadata says MIT while the licence text it ships, and the one in its
 repository, is the GNU GPL v3; the shipped text governs here, so the manifest
 says GPL-3.0-only.
 
-**If you installed Reticulum with pip or pipx before.** The wrappers this
-unit writes replace `~/.local/bin/rnsd` and the other commands, and a pipx
-install can be damaged through its symlink (issue #288: the engine does not
-yet check who wrote an entry there). Remove the old one first: `pipx uninstall
-rns` or `python3 -m pip uninstall rns`. Uninstalling this unit does not bring
-the old one back.
+**If you installed Reticulum with pip or pipx before.** The plan stops, naming
+each command (`rnsd`, `rnstatus` and the rest) that already exists in
+`~/.local/bin` and that Hammunition did not write; a pipx install leaves
+symlinks there, and Hammunition never replaces or writes through one (issue
+#288, **D-022**). Nothing has been changed when you see it. Remove the old
+install (`pipx uninstall rns` or `python3 -m pip uninstall rns`) or move those
+files aside, and run the install again. Uninstalling this unit does not bring
+the old one back. Hammunition's own earlier wrappers are recognised by a
+header line and replaced without a fuss.
 
 **Where the programs went.** Each of `rns`, `lxmf` and `nomadnet` is a
 per-user virtualenv under `~/.local/share/hammunition/venvs/`, with a small

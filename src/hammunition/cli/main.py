@@ -182,7 +182,15 @@ from hammunition.paths import (
     venv_root,
 )
 from hammunition.phone_plan import build_phone_run
-from hammunition.plan import NO_MAP_REGIONS, Blocker, Deferral, InstallPlan, PlanError, resolve
+from hammunition.plan import (
+    NO_MAP_REGIONS,
+    Blocker,
+    Deferral,
+    InstallPlan,
+    PlanError,
+    resolve,
+    venv_wrapper_blockers,
+)
 from hammunition.progress import LiveStatus, Progress, activate_live, current_live
 from hammunition.repeater_sources import SnapshotHead
 from hammunition.retry import (
@@ -4616,6 +4624,14 @@ def cmd_install(args: argparse.Namespace) -> int:
             # ours to skip (#63). The same log is written to after the plan.
             log=read_log,
         )
+        # #288: a command name already in ~/.local/bin that Hammunition did not
+        # write (a pipx symlink, a pip script) is a blocker named at plan time,
+        # beside every other one, not a wrapper written over it mid-run. Looked
+        # at here, where the operator's bin directory is known and nothing has
+        # run; the write looks again.
+        wrapper_blockers = venv_wrapper_blockers(plan, user_bin_dir(user or None))
+        if wrapper_blockers:
+            raise PlanError(wrapper_blockers)
     except PlanError as exc:
         print(str(exc), file=sys.stderr)
         print(
