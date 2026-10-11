@@ -203,6 +203,35 @@ def _no_machine_queries() -> Any:
         SubprocessRunner.run = _real_run  # type: ignore[method-assign]
 
 
+@pytest.fixture(autouse=True)
+def _no_host_security_key_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test asks a real FIDO2/PIV token, pcscd or OpenSSH binary for
+    doctor's security-key checks (A12).
+
+    `doctor`'s `_security_key_probe` is a different seam than
+    `SubprocessRunner.run` above: it runs `systemctl`, `ssh`, `fido2-token`
+    and `opensc-tool` directly with its own bounded subprocess adapter, not
+    through a `Command`/`CommandRunner`, so `_no_machine_queries` does not see
+    it. Blocked here instead, with the same failure a test should hit
+    immediately rather than silently asking the host's own tokens and pcscd
+    daemon. Function-scoped, because `monkeypatch` is function-scoped and a
+    test that wants a real result patches `_security_key_probe` again, after
+    this fixture has already run.
+    """
+    import importlib
+
+    cli = importlib.import_module("hammunition.cli.main")
+
+    def blocked(argv: tuple[str, ...]) -> CommandResult:
+        raise MachineQueried(
+            f"the test suite blocked the real {argv[0]!r} for doctor's security-key probe. "
+            f"A doctor CLI test must inject an explicit CommandResult: "
+            f"monkeypatch.setattr(cli, '_security_key_probe', lambda argv: CommandResult(...))."
+        )
+
+    monkeypatch.setattr(cli, "_security_key_probe", blocked)
+
+
 def _fake(program: str) -> bool:
     """Whether *program* resolves on PATH to a file under the temp directory,
     or to nothing at all (the missing-sudo case is a test of its own)."""

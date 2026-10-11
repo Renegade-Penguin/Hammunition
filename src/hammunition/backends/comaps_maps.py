@@ -27,7 +27,7 @@ files there for the operator. Nothing here is ever executed.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
 
@@ -46,6 +46,7 @@ from ..comaps import (
 from ..fetch import Fetcher, MirrorPath, fetch_disclosure, record_fetch
 from ..manifest.schema import MwmRegionsInstall, PackageManifest
 from ..progress import run_checks
+from ..resolution import CatalogueMiss, ResolutionContext
 from ..retry import OnOutage, PublisherUnavailable, hint_for
 from .base import Action, Command, CommandRunner
 from .data import human_size
@@ -71,6 +72,19 @@ def mirror_path(unit: str, f: MapFile) -> MirrorPath:
     """Where a LAN mirror serves this map (D-070): ``<unit>/<version>/<id>.mwm``,
     the installed layout, so two versions never share a name."""
     return MirrorPath(unit, f"{f.version}/{f.file}")
+
+
+def require_map(f: MapFile, unit: str, context: ResolutionContext) -> None:
+    """The Bunker's record for *f* agrees with the repository's own CoMaps index.
+
+    Size first, then the publisher SHA-1 (the catalogue's ``sha1-publisher``
+    check), both from the repository's pin; the record is never compared with
+    itself. A miss defers the whole map selection."""
+    name = mirror_path(unit, f).name
+    row = context.require_payload(unit, name, size=f.pin.size)
+    if row.publisher_check != "sha1-publisher":
+        raise CatalogueMiss(f"{unit}/{name}: Bunker entry is not a SHA-1 publisher check")
+    context.require_payload(unit, name, publisher_digest=sha1_hex(f.pin.sha1))
 
 
 def maps_disk_needs(pending: Sequence[MapFile], *, cache: Path, prefix: Path) -> dict[Path, int]:
@@ -126,6 +140,8 @@ class ComapsMapsBackend:
     """Remove nothing this run: a book or map was deferred because its publisher
     is not answering (#200), and the installed file it would have replaced
     must not be removed with nothing arriving in its place."""
+    provenance: Mapping[tuple[str, str], str] = field(default_factory=dict)
+    """What the Bunker's catalogue answered for (unit, map name): said on the fetch line."""
     method = "mwm-regions"
 
     def data_dir(self, manifest: PackageManifest) -> Path:
@@ -156,6 +172,11 @@ class ComapsMapsBackend:
                     description=(
                         f"Fetch CoMaps map {f.id} ({human_size(f.pin.size)}, {block.licence}) "
                         f"— {VERIFIED_BY}{note}"
+                        + (
+                            f"; {self.provenance[(manifest.name, where.name)]}"
+                            if (manifest.name, where.name) in self.provenance
+                            else ""
+                        )
                     ),
                     detail=(
                         f"{urls} (SHA-1 {sha1_hex(f.pin.sha1)[:12]}…, {f.pin.size} bytes; "
@@ -261,6 +282,8 @@ def resolve_station_maps(
     head: Callable[[str], tuple[int, int]],
     on_outage: OnOutage | None = None,
     checks: PublisherChecks | None = None,
+    context: ResolutionContext | None = None,
+    unit: str | None = None,
 ) -> tuple[list[MapFile], list[str]]:
     """The station's regions as pinned maps, checked before the plan prints;
     and a note naming each region the table cannot place.
@@ -279,7 +302,17 @@ def resolve_station_maps(
     With *checks* (#197), an installed map the log attributes is not asked
     again until the attribution is a week old; a map that is asked and no
     longer published at its pin is a note in the plan, never a refusal.
+
+    With a *context* (#381), a map the CDN cannot be asked about is answered by
+    the Bunker's record, checked against the repository's own pin
+    (:func:`require_map`); *unit* (the catalogue key) is then required. A map
+    the Bunker cannot answer for, while a Bunker is verified, defers the whole
+    selection (:class:`~hammunition.resolution.CatalogueMiss`). Offline the CDN
+    is never asked, and a map installed at its pin needs no record and no
+    recheck.
     """
+    if context is not None and unit is None:
+        raise ValueError("resolve_station_maps needs the unit name when given a context")
     pins = load_pins(catalog_root)
     files, unmapped = resolve_regions(regions, pins)
     notes = [UNMAPPED.format(region=region) for region in unmapped]
@@ -299,21 +332,37 @@ def resolve_station_maps(
                 f"{f.url} answered HTTP {status} with {size} bytes, not the pinned map"
             )
 
-    recheck_installed(
-        checks,
-        installed.name,
-        [f for f in files if map_current(map_dest(installed, f), f)],
-        name=lambda f: f.id,
-        path=lambda f: map_dest(installed, f),
-        check=still_published,
-        digest=lambda f: f.pin.sha1,
-        label="installed CoMaps maps against the CoMaps CDN",
-    )
-    outcomes = run_checks(todo, lambda f: head(f.url), label="CoMaps maps against the CoMaps CDN")
+    if context is None or not context.offline:
+        recheck_installed(
+            checks,
+            installed.name,
+            [f for f in files if map_current(map_dest(installed, f), f)],
+            name=lambda f: f.id,
+            path=lambda f: map_dest(installed, f),
+            check=still_published,
+            digest=lambda f: f.pin.sha1,
+            label="installed CoMaps maps against the CoMaps CDN",
+        )
+
+    def answer(f: MapFile) -> tuple[int, int]:
+        if context is None or unit is None:
+            return head(f.url)
+
+        def recorded() -> tuple[int, int]:
+            require_map(f, unit, context)
+            return 200, f.pin.size
+
+        return context.choose(unit, mirror_path(unit, f).name, lambda: head(f.url), recorded)
+
+    outcomes = run_checks(todo, answer, label="CoMaps maps against the CoMaps CDN")
     for f, outcome in zip(todo, outcomes, strict=True):
         try:
             status, size = outcome.get()
+        except CatalogueMiss:
+            raise
         except PublisherUnavailable as exc:
+            if context is not None and context.verified is not None:
+                raise CatalogueMiss(f"{f.id}: no complete map set: {exc}") from exc
             if on_outage is None:
                 problems.append(f"  {f.id}: {exc}")
             else:

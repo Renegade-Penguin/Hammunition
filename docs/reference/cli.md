@@ -133,7 +133,7 @@ With `--json`, prints a `status` document
 and every unit a transaction here has named. A front end derives which
 profiles those units belong to from `list --json`.
 
-### `hammunition update [NAME...] [--user NAME] [--upstream]`
+### `hammunition update [NAME...] [--user NAME] [--upstream] [--offline]`
 
 Installed versus the catalog, as a report. Nothing runs, nothing is fetched,
 and no network is used (**D-053**). With no names it compares every unit
@@ -179,6 +179,15 @@ it**, and the report says when those lists were last fetched. It does not
 refresh them: a report that ran `apt-get update` would be changing the
 machine, and a laptop that last updated before a trip is told which day it
 is comparing against.
+
+**`--offline`** (**#381**) asks for the same report with a guarantee: it reads only
+the local apt lists and the install records, never asks upstream, and requires
+an enrolled Bunker whose catalogue verifies. With none enrolled it stops at
+once, naming `hammunition mirror enrol URL`. It refuses `--upstream`, even for
+an empty request, before anything else runs. Verifying the catalogue can
+advance the serial recorded in the local mirror file; the report says so on its
+last line (`offline` in `--json`), because that is a local write even though no
+package is touched.
 
 Without `--upstream` it does not ask upstream. Twenty-seven of this
 laptop's units declare a GitHub, PyPI or version-file probe; whether the
@@ -297,8 +306,12 @@ paths. It is Geofabrik's list, nothing of yours.
 
 Every remote data artifact the engine would fetch for the selection on the
 command line (**D-070**): each `data` unit's files, the Geofabrik extract of
-each region, the Copernicus tiles each region's outline touches, and each
-Kiwix book given (**D-066**, the 2026-10-01 amendment of D-070). It
+each region, the Copernicus tiles each region's outline touches, each Kiwix
+book given (**D-066**, the 2026-10-01 amendment of D-070), the US Topo and
+FSTopo sheets and USGS 3DEP tiles each region's outline touches, and --
+since **Task 16** -- every catalog-pinned program payload: a `source`
+build's archive, a `binary` or `node` artifact, a `venv`'s own payload tree,
+a `derived` block's converter tool, and a `git` block's `extra_files`. It
 reads no station file and nothing installed on this machine, and installs
 nothing; the answer is the same on every machine. It is what
 [Hammunition Bunker](https://github.com/Renegade-Penguin/hammunition-bunker), a
@@ -313,26 +326,50 @@ $ hammunition artifacts --map-regions north-america/us/vermont --units osm-regio
 | `--map-regions R[,R…]` | Geofabrik region paths, as `station set --map-regions` takes them. None defers the map units |
 | `--map-freshness MODE` | `yearly` (the default), `monthly` or `latest`: which dated file each region resolves to and how it is verified, exactly as in the plan |
 | `--reference-books ID[,ID…]` | Kiwix book ids, as `station set --reference-books` takes them (`hammunition reference books` lists them). Each is listed by its id with the pinned URL, `sha256`, size and the book's own licence line, from the carried pins with no network asked. An id the book list or the pins do not carry is listed as deferred; a malformed one, or an empty list, exits 2. None defers `kiwix-library` as *no books selected* |
-| `--units U[,U…]` | The units to list. Default: every unit with a `data`, `osm-regions`, `dem-tiles`, `mwm-regions` or `kiwix-books` install block, then `repeater-snapshots` (D-078: not a catalog unit, the on-request repeater lists a Bunker may hold, which can also be named here). A name not in the catalog, or a unit that fetches nothing (`osm-navit`, `navit`), exits 2 naming it |
+| `--units U[,U…]` | The units to list. Default: every unit with a `data`, `osm-regions`, `dem-tiles`, `mwm-regions`, `kiwix-books`, `register` or `topo-quads` install block, every unit with a `source`, `binary`, `venv`, `node` or `git` install block, every `derived` block naming a converter `tool` (Task 16), then `repeater-snapshots` (D-078: not a catalog unit, the on-request repeater lists a Bunker may hold, which can also be named here). A name not in the catalog, or a unit that fetches nothing (`osm-navit`, `navit`: apt-only, or a `derived` block with no `tool`), exits 2 naming it |
 
 The network is asked as the plan asks it, and only for what the selection
 names: Geofabrik for a region's dated file, its `.md5` and its `.poly`
-outline, and the Copernicus bucket for an unpinned tile's size and ETag. A
-pinned region or tile asks nothing. What cannot be resolved — a region
-Geofabrik does not have, an outline that cannot be read, a map unit with no
-`--map-regions` — is listed as deferred with the reason; it does not change
-the exit code.
+outline, the Copernicus bucket for an unpinned tile's size and ETag, the
+USGS buckets for a US Topo sheet's or a 3DEP tile's size and S3 ETag, and the
+Forest Service's raster gateway for an FSTopo sheet's location and size. A
+pinned region or tile asks nothing, and a catalog-pinned program payload
+(`source`, `binary`, `venv`, `node`, a `derived` block's `tool`, a `git`
+block's `extra_files`) asks nothing either -- its sha256 is already in the
+manifest. What cannot be resolved — a region Geofabrik does not have, an
+outline that cannot be read, a map unit with no `--map-regions`, a carried
+US Topo/FSTopo/3DEP index this checkout lacks — is listed as deferred with
+the reason; it does not change the exit code.
 
 With `--json`, prints an `artifacts` document
 ([json-interface.md](json-interface.md)): per artifact the unit, its stable
 name within the unit (what a mirror serves at `<mirror>/<unit>/<name>`), the
-publisher URL, the check (`sha256`, `md5-publisher`, `etag-md5`, `sha1-publisher` for CoMaps' maps, D-069, or
-`unverified-zip` for the ACMA register, D-074 amended 2026-10-01), the
-expected digest (null for `unverified-zip`: none is published), where a
-publisher checksum was read, the size, the licence, and `deferred`. The
-ACMA register's size is asked of the ACMA with one `HEAD` each listing,
-because the file changes daily; when that fails the entry is deferred. It carries the regions and books given, and nothing of the
+publisher URL, the check (`sha256`, `md5-publisher`, `etag-md5`, `sha1-publisher` for CoMaps' maps, D-069, `unverified-zip` for the ACMA register (D-074 amended
+2026-10-01), or `unverified-fetch` for a repeater snapshot or an FSTopo sheet
+with no carried pin), the
+expected digest (null for `unverified-zip` and `unverified-fetch`: neither
+is published), a nullable `part_size` (an `etag-md5` multipart part size in
+bytes), where a publisher checksum was read, the size, the licence, and
+`deferred`. The ACMA register's size is asked of the ACMA with one `HEAD`
+each listing, because the file changes daily; when that fails the entry is
+deferred. It carries the regions and books given, and nothing of the
 station's.
+
+The same document's `inputs` array (Task 16) is, for every region a
+regional unit among `--units` needs, the exact UTF-8 bytes of its Geofabrik
+outline and its four recorded selections (US Topo, FSTopo, Copernicus and
+3DEP) -- the same text the engine's own stateless selectors would compute,
+inlined with a sha256 and size, or a `deferred` reason naming why that one
+input cannot be produced (a missing carried index, an unreachable or
+malformed outline). An inline input over 8 MiB exits 2 naming it, asking to
+narrow the selection with `--units` rather than silently truncating it. The
+`git_pins` array is, for every `git` install block among `--units`, its
+pinned revision for a Bunker to mirror as a verified bundle: the repo, ref,
+commit (null and `deferred` for a tag with no recorded commit), whether the
+tree has submodules to walk, and the manifest's own licence line. Neither
+array clones a repository or asks a Bunker; see
+[bunker-catalogue.md](bunker-catalogue.md) for the exact division of
+responsibility between this command and the Bunker's own writer.
 
 ### `hammunition maps qmapshack [--configure-only]`
 
@@ -1254,7 +1291,7 @@ its manifest. Names are resolved against profiles first, then units, so a
 profile wins if the same name exists in both. The text form still describes
 profiles only.
 
-### `hammunition install NAME... [--dry-run] [--yes] [-v|--verbose] [--no-refresh] [--no-sudo-keepalive] [--no-mirror] [--recheck] [--full] [--user NAME] [--callsign CALL] [--grid-square LOC] [--node-alias NAME]`
+### `hammunition install NAME... [--dry-run] [--yes] [-v|--verbose] [--no-refresh] [--no-sudo-keepalive] [--no-mirror] [--offline] [--recheck] [--full] [--user NAME] [--callsign CALL] [--grid-square LOC] [--node-alias NAME]`
 
 **A re-run rebuilds nothing it has already built** (**D-051**): a source, git
 or prebuilt-archive unit whose binaries are on the machine *and* whose build
@@ -1300,11 +1337,22 @@ has been measured.
 | `--no-sudo-keepalive` | Do not hold sudo's ticket for the run (**D-062**). By default a run as a user that mixes root steps with steps that are not asks the password once, by `sudo -v`, before the first step, and keeps the ticket valid with `sudo -n -v` every 4 minutes until the run ends. With this flag each root step asks for itself, and one that follows a long step may prompt again. `--sudo-keepalive` is the default and still parses |
 | `--recheck` | Ask every data item's publisher at plan time, including installed items the transaction log attributes. Without it those are trusted for 7 days (`attributed.RECHECK_AFTER_DAYS`): the plan prints `N installed data item(s) were not re-checked against their publishers` with the oldest attribution date, `--json` carries a `publisher_checks` line per item with `checked: false` and the reason, and an item attributed 7 or more days ago, or whose file is not the one the log recorded, is asked again. A re-check that fails is a `note:`, never a refusal; the real run verifies everything it fetches either way (**D-049**, #197) |
 | `--no-mirror` | Ignore the LAN mirror set in station config for this run (**D-070**): every data download comes from its publisher. With no mirror set it changes nothing |
+| `--offline` | Resolve everything from the enrolled Bunker's verified catalogue and never ask a publisher (**#381**, phase 1). The catalogue is read and verified once, before any apt probe; with no Bunker enrolled the run stops at once naming `hammunition mirror enrol URL`. `apt-get update` is never planned, and an apt package the machine does not already have, a pip or npm step, a third-party apt repository, and a unit whose map, terrain, topographic-sheet, reference-book, CoMaps-map or git resolution still asks a publisher are each refused by name (apt and pip on the Bunker are phase 2). A data unit counts only if every artifact is already in the cache or on the Bunker at the repository's own sha256 and size: a profile member with a gap is deferred whole, a unit you typed is refused, and a unit that depends on a dropped one is dropped with it. A source, binary, Python-venv payload or Node source download is a Bunker item named `<sha256>/<file name>` in its unit: it counts only if its verified bytes are already in the cache or the Bunker holds it at the repository's own sha256 (a unit already built needs neither), and a profile member without it is deferred whole while a unit you typed is refused. A download whose repository pin is weaker than a sha256 (an md5, SHA-1, ETag, size or nothing) is also checked, when it comes from the Bunker, against the sha256 the signed catalogue lists for it; a mismatch is refused naming both digests (online, the run falls back to the publisher and prints a `WARNING` line naming the Bunker, the item and both digests; a catalogue row that is malformed is a refusal offline and a warning plus publisher-only online). A vendor `.deb` whose dependencies are not all met by an installed package (at the stated architecture, and at a version in the stated range) is refused too, because apt would fetch them: before the run when its bytes are cached, and by the install itself right after the fetch when they are not (the plan says the check is deferred). A `Depends` field that does not parse (an unbalanced parenthesis, an unknown relation or architecture qualifier, an empty group, trailing text, an invalid version) is refused, never read as no dependency. The install runs `apt-get` with `--no-install-recommends --no-download`, so apt can fetch nothing, and the plan lists the Recommends that are not installed. The install also runs in a `bwrap` sandbox with the filesystem left writable (apt is installing real files system-wide) but `/run`, `/var/run`, `/tmp`, `/var/tmp`, `$XDG_RUNTIME_DIR` and the operator's home private and empty, so the package's maintainer scripts and triggers have no network and no pathname UNIX socket (docker, podman, a user's agent or proxy) to bridge through; with no working `bwrap` the vendor `.deb` unit is refused. An offline source build runs in the same sandbox read-only instead (`--ro-bind / /`) with writable binds only for the build tree and the install prefix, and additionally hides `/opt`, `/srv`, `/mnt` and `/media` — a build has no legitimate reason to read any of them, and a read-only bind alone does not stop a connection to a socket that lives there — so upstream's build code can neither fetch anything nor reach the common host UNIX sockets. `/usr/local` is not on that list: it is the engine's one unconfigurable install prefix, so the writable bind re-exposes it regardless, and hiding it first would misreport the guarantee. `unshare --net` alone is not accepted for either: it blocks no pathname socket, only IP and abstract ones; with no working `bwrap` the source unit is refused. Neither sandbox's socket hiding is exhaustive — a socket placed somewhere not on either list (`/usr/local`, `/etc`, `/var/lib`, ...) stays connectable; this closes the common bridges (docker, podman, dbus, a user's own proxy) and is not a complete guarantee. The native architecture comes from `dpkg --print-architecture` (the kernel's name only without dpkg), and `:any` means the native and every foreign architecture `dpkg --print-foreign-architectures` lists. Any other pinned download with no Bunker route yet is refused by name unless its verified bytes are already in the cache. Downloads come from the Bunker alone (`Bunker only` in the plan), a copy that fails its digest is discarded and refused, and no publisher is tried. Installed items are never re-checked against their publishers, even with `--recheck`. Every line the catalogue answered carries `offline; resolved from Bunker NAME (fingerprint), recorded TIME`, with any weak-key or age warning the signer carries. Cannot be combined with `--no-mirror`. With `--json` (and `--dry-run`) a refusal before resolution, such as no Bunker enrolled, is a refused `plan` document like any other. Accepting a newer catalogue advances the serial in the local mirror file, which the plan says as a local write and not a package action; `--dry-run` never writes it, offline or online, and the plan says what a real run would do. It changes no consent: `--yes` still does not satisfy a gate, and a real install is still never driven through `--json` |
 | `--full` | Print every step of the plan expanded. Without it, a run of steps that repeat one template for many items (a US Topo sheet, a terrain tile, a Kiwix book) is printed as the template with `<placeholders>`, the first item written out in full, every item's own values on a line, and the totals; `--dry-run --full` prints the plan exactly as it was before grouping (**D-016**, amended 2026-10-02). `--json` always carries every step, with or without it |
 | `--user NAME` | Who to add to groups. Defaults to `$SUDO_USER`, then `$USER` |
 | `--callsign CALL` | Station callsign for this run. Overrides the saved value |
 | `--grid-square LOC` | Maidenhead locator, four or six characters |
 | `--node-alias NAME` | Short packet node alias, up to six characters |
+
+**An enrolled Bunker, online.** With a Bunker enrolled and no `--no-mirror`, an
+`install` reads and verifies its catalogue once at the start, so a publisher
+that stays down after its retries can be answered from what the Bunker
+recorded. If that cannot be done (the Bunker is unreachable, a signature fails,
+the serial went backwards, the document is malformed, or the trust state cannot
+be written) the fallback is off for the run: one `note:` names the reason and
+says `--no-mirror` skips the Bunker, and the install goes ahead, since every
+download is still checked against its own pinned hash. `--offline` refuses in
+the same cases.
 
 **File capabilities (D-079).** When a selected unit declares optional Linux
 capabilities, the plan shows the target binary and exact `CAPABILITY=ep` grant.
@@ -1820,7 +1868,7 @@ A **read-only** health check: is this machine ready, and what is not yet set
 up. It changes nothing, and it is the first thing to run on a fresh machine
 or when something misbehaves — it turns the failures the engine would
 otherwise hit mid-transaction into a report you read up front, each with the
-one command that fixes it. Twenty-four checks across four severities:
+one command that fixes it. Twenty-eight checks across four severities:
 
 - **fail** — the engine cannot work until fixed (not a Debian-family system;
   no catalog). Exits non-zero.
@@ -1949,6 +1997,26 @@ executable, and a warn naming the launcher when:
   renamed launcher.
 
 No launcher that runs the engine and none that shadows a binary, no line.
+
+The **pcscd**, **FIDO2 token**, **PIV token**, **OpenSSH signing**, **FIDO2
+access**, **PIV access**, **Bunker key** and **Bunker key strength** checks
+are hardware signing readiness, read-only: `systemctl is-active pcscd`,
+`ssh -V`, `fido2-token -L`/`-I`, and `opensc-tool --list-readers`/`--reader N
+--name`, bounded to 5 seconds and 64 KiB of output and run as the operator
+invoking `doctor`, never a PIN mint, a touch-signing request or a login
+change. A present token is information, not every operator wants one; a
+*warn* for `pcscd` inactive, OpenSSH older than 8.2 (needed for `-sk`
+signing), or a device enumeration that answered permission-denied (named as
+*access*, never a misleading "no token"). Run as root, the two *access*
+checks say so is unmeasured rather than claiming a true-as-root result — a
+udev rule grants the console user, not root, and `doctor` cannot measure on
+the operator's behalf; run it as yourself, without `sudo`. **Bunker key**
+lists every key already enrolled in the owner-aware mirror store
+(`hammunition mirror status`), its fingerprint, algorithm and bit size; a
+weak one (RSA 2048 or under) adds a **Bunker key strength** warning naming
+the replacement. A mirror store that cannot be read is a warn naming
+`hammunition mirror status`, not a crash. Nothing here signs a test message
+or refreshes the mirror's trust or accepted serial.
 
 The closing line counts each, and the exit code is non-zero only when
 something is **blocking**. It is the natural first command after installing
@@ -2421,6 +2489,45 @@ it never passes the assume-yes flag and never runs as root. Walkthrough:
 - It has **no `--json` form**: `hammunition console --json` is refused like any verb with no document.
 - It launches the engine as `<its own interpreter> -m hammunition`, never a `hammunition` found on `PATH`.
 
+## mirror
+
+A signed Bunker catalogue (**D-085**, `docs/guides/lan-mirror.md`,
+`docs/reference/bunker-catalogue.md`): enrolling it is a separate step from
+`station set --mirror`, below, which only gives the D-070 download route and
+enrols no trust on its own.
+
+### `hammunition mirror enrol URL [--enrolment-id ID]`
+
+Fetch the Bunker's catalogue and show each signer’s fingerprint, measured
+algorithm and size, hardware claim, `no_touch_required` metadata and any weak-key
+warning. Type the chosen fingerprints, comma-separated, then confirm each
+fingerprint at the terminal. A non-sk key’s hardware claim requires a separate
+hardware-origin affirmation and typed fingerprint consent, recorded in the
+transaction log. `no_touch_required` is display only.
+
+Enrolment verifies a signature before storing trust and the station URL. Re-enrolling
+the same URL and Bunker name retains the accepted serial and only the keys explicitly
+chosen this time. A lower serial refuses. A changed URL or name is new enrolment.
+There is no `--yes` and no JSON form; `--json` refuses with an `error` document.
+A group enrolment id is a sharing filter sent in clear over HTTP, not identity proof.
+
+### `hammunition mirror status [--json]`
+
+Show stored Bunker trust, each key’s strength, hardware assertion and
+`no_touch_required`, accepted serial and age of the last verified catalogue.
+Nothing is fetched. Missing trust reports no Bunker enrolled. A station URL that
+differs from enrolled trust requires re-enrolment.
+
+`--json` prints a `mirror` document ([JSON interface](json-interface.md)).
+
+### `hammunition mirror accept-older`
+
+Verify the current catalogue with enrolled keys and the station hardware policy,
+show its serial beside the accepted serial, then ask for typed `yes` at a terminal.
+Use this only after restoring the Bunker from a trusted backup. An invalid signature
+still refuses. There is no `--yes` and no JSON form; `--json` refuses with an
+`error` document.
+
 ### `hammunition station show`
 
 The values only you can supply — callsign, grid square, packet node alias,
@@ -2443,8 +2550,9 @@ hammunition station show
 | `--map-regions R[,R…]` | Geofabrik region paths for offline maps, e.g. `north-america/us/vermont,north-america/us/new-hampshire`. Replaces the whole list. Checked for shape only (lowercase words joined by `/`); whether Geofabrik has the region is checked at plan time (**D-057**) |
 | `--map-freshness MODE` | `yearly` (the default when unset), `monthly` or `latest`: which dated file each region resolves to, and so how it can be verified |
 | `--reference-books ID[,ID…]` | Kiwix books for `kiwix-library`, by id (`hammunition reference books` lists them). Replaces the whole list; an id the catalog's book list does not name is refused when you type it, and an empty list is refused (uninstall `kiwix-library` to remove the books) (**D-066**) |
-| `--mirror URL` | A LAN mirror of the data artifacts, e.g. `http://bunker.lan:8080/` (**D-070**). Each data download (a `data` unit's files, a map region, a terrain tile, a CoMaps map, a reference book) asks `<URL>/<unit>/<name>` first and the publisher on any failure, the same digest checked either way. `http` or `https` with a host; no user, password, query or fragment. A LAN address, never one reachable from the internet; `docs/guides/lan-mirror.md` |
-| `--clear-mirror` | Remove the saved mirror |
+| `--mirror URL` | A LAN mirror of the data artifacts, e.g. `http://bunker.lan:8080/` (**D-070**). Each data download (a `data` unit's files, a map region, a terrain tile, a CoMaps map, a reference book) asks `<URL>/<unit>/<name>` first and the publisher on any failure, the same digest checked either way. `http` or `https` with a host, or `file:///absolute/path` with no host; no user, password, query or fragment. A LAN address, never one reachable from the internet. **Does not enrol signing keys or authorize `--offline` planning** — that is `hammunition mirror enrol URL` (**D-085**); `docs/guides/lan-mirror.md` |
+| `--clear-mirror` | Remove the saved mirror URL and all enrolled keys, enrolment id and accepted serial; preserve hardware policy |
+| `--mirror-require-hardware-key` / `--no-mirror-require-hardware-key` | Require an enrolled hardware signer for Bunker catalogues, or turn that policy off (default). Hardware means sk type or operator-affirmed origin. `station set --json` reports the policy in its `station-set` document; `station show --json` includes it in the `station` document |
 | `--doppler-project PROJECT`, `--doppler-config CONFIG` | Where a keyed download's key is read from when its environment variable is not set (**D-081**): the two names of a Doppler project and config, given together, never a token. Each is letters, digits, `.`, `_` or `-`, starting with a letter or digit. One without the other, or either with `--clear-doppler`, is refused (exit 2) |
 | `--clear-doppler` | Remove both Doppler names |
 | `--dem-source SOURCE` | `copernicus` (the default when unset) or `3dep`: the elevation QMapShack's hillshade, slope and contours are drawn from (**D-068**, amended 2026-10-01). `3dep` makes `dem-3dep` fetch USGS 3DEP 1/3-arc-second bare-earth tiles for the US regions, about ten times Copernicus's size, and `dem-qmapshack` redraw from them; Copernicus stays installed for BRouter and for regions outside the US. Setting it back to `copernicus` removes the 3DEP tiles and redraws from Copernicus on the next install. `station show` prints it |

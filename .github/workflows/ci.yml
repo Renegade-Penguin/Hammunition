@@ -182,6 +182,17 @@ jobs:
             python scripts/capability_matrix.py --check
 
       - name: Run the test suite inside the target
+        # The offline source-build and vendor-.deb sandboxes (#381) run real
+        # bwrap, which needs to create its own nested user namespace.
+        # Measured 2026-10-10: seccomp=unconfined, +--cap-add=SYS_ADMIN, and
+        # +apparmor=unconfined (tried individually and together) all left the
+        # identical "no working bwrap sandbox" failure -- including on
+        # GitHub Actions' own bare Ubuntu 24.04 runner with no container at
+        # all, which rules out container confinement as the cause. This is a
+        # genuine environment gap, not a setting here can fix. The guard
+        # tests fake the sandbox probe (test_offline_guard.py); the two that
+        # run a real bwrap skip when the probe finds none. Kept at the
+        # default profile.
         run: |
           podman run --rm "hammunition-$TARGET:ci" \
             python -m pytest

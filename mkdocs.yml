@@ -151,6 +151,7 @@ nav:
       - rf-security: profiles/rf-security.md
       - rfid: profiles/rfid.md
       - rf-research: profiles/rf-research.md
+      - security-keys: profiles/security-keys.md
   - Guides:
       - guides/index.md
       - Operating:
@@ -251,6 +252,7 @@ nav:
       - The engine:
           - Command line: reference/cli.md
           - JSON interface: reference/json-interface.md
+          - Bunker catalogue: reference/bunker-catalogue.md
           - Console coverage: reference/console-coverage.md
           - Manifest schema: reference/schema.md
           - Run logs: reference/run-logs.md

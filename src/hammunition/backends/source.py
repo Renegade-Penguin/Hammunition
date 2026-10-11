@@ -48,6 +48,7 @@ not only the intent (**D-031**).
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import shutil
 import tarfile
@@ -57,6 +58,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from hammunition import netiso
 from hammunition.manifest.schema import (
     Binary,
     InstallBlock,
@@ -65,6 +67,7 @@ from hammunition.manifest.schema import (
     SourceInstall,
     effective_binaries,
 )
+from hammunition.payloads import payload_action, payload_cached, preflight_payloads
 
 from .base import Action, BackendError, Command
 
@@ -77,6 +80,7 @@ if TYPE_CHECKING:
     # `operator_dir` and `remove_tree` are real runtime dependencies, unlike
     # `Fetcher`, and are imported locally where they are used instead.
     from hammunition.fetch import Fetcher
+    from hammunition.resolution import ResolutionContext
 
 __all__ = [
     "DEFAULT_PREFIX",
@@ -224,7 +228,9 @@ def prepare_tree(destination: Path) -> str:
     (``build/unit-abc -> /somewhere``) is refused, never followed. That is
     all this protects. Root still builds by path inside an operator-owned
     directory afterwards, which an operator-uid process can race; that is a
-    separate, open issue, not solved here.
+    separate, open issue, not solved here. The git-bundle backend's recursive
+    gitlink checkout (:func:`hammunition.gitbundles._ancestors_are_not_symlinks`)
+    has the identical shape, tracked together as Hammunition #399.
     """
     # Late import: see the TYPE_CHECKING comment at the top of this module
     # (#158's cycle) -- hammunition.fetch has finished loading by the time any
@@ -372,10 +378,18 @@ class SourceBackend:
         prefix: Path = DEFAULT_PREFIX,
         jobs: int | None = None,
         owner: str | None = None,
+        context: ResolutionContext | None = None,
+        isolation: str | None = None,
     ) -> None:
+        #: The network sandbox (``netiso``) offline builds run in; None when
+        #: the machine has none, which refuses an offline build.
+        self.isolation = isolation
         self.fetcher = fetcher
         self.build_root = build_root
         self.prefix = prefix
+        #: The run's resolution context: offline, a payload the Bunker cannot
+        #: answer for is refused before any build step exists.
+        self.context = context
         self.jobs = jobs if jobs is not None else default_jobs()
         #: The operator an installed tree is handed to (D-043); None keeps it root's.
         self.owner = owner
@@ -414,15 +428,16 @@ class SourceBackend:
                 f"regression — D-014 records the zero rather than building for it."
             )
 
+        preflight_payloads(
+            manifest.name,
+            ((block.source, None),),
+            context=self.context,
+            cached=payload_cached(self.fetcher),
+        )
         layout = self.layout(manifest, block)
         artifact = block.source
         steps: list[Action | Command] = [
-            Action(
-                kind="fetch",
-                description=f"Download and verify the {manifest.name} source archive",
-                detail=f"{artifact.url} -> {self.fetcher.path_for(artifact)} (sha256 verified)",
-                perform=lambda: self._fetch(manifest, block),
-            ),
+            payload_action(manifest.name, artifact, self.fetcher, label="source archive"),
             Action(
                 kind="extract",
                 description=f"Unpack the {manifest.name} source",
@@ -434,10 +449,28 @@ class SourceBackend:
         steps.extend(self._build_commands(manifest, install_block, block, layout))
         return steps
 
-    def _fetch(self, manifest: PackageManifest, block: SourceInstall) -> str:
-        result = self.fetcher.fetch(block.source)
-        where = "cached" if result.from_cache else "downloaded"
-        return f"{where} {result.size} bytes, sha256 {result.sha256[:12]}… verified"
+    def _isolated(self, name: str, commands: list[Command], layout: SourceLayout) -> list[Command]:
+        """Offline, upstream's build runs in the bwrap sandbox (no network, a
+        read-only filesystem but the build tree and the install prefix, and
+        /run, /tmp, the operator's home, /opt and the other places a build
+        has no reason to read all private — not /usr/local, the one writable
+        prefix, which stays exposed under its own bind-try either way) so it
+        cannot fetch anything the Bunker did not vouch for, nor reach the
+        common host sockets (docker, podman, dbus); online it is unchanged."""
+        if not self.fetcher.offline:
+            return commands
+        if self.isolation != netiso.BWRAP:
+            raise BackendError(
+                f"{name}: an offline source build runs upstream's build code and needs the "
+                f"bwrap sandbox (no network, read-only filesystem, private /run, /tmp and "
+                f"the operator's home), and this machine has none that works. Nothing was "
+                f"planned."
+            )
+        writable = [layout.root, self.prefix]
+        return [
+            dataclasses.replace(command, argv=netiso.sandbox(command.argv, writable=writable))
+            for command in commands
+        ]
 
     def _build_commands(
         self,
@@ -446,19 +479,23 @@ class SourceBackend:
         block: SourceInstall,
         layout: SourceLayout,
     ) -> list[Command]:
-        commands = build_commands(
-            name=manifest.name,
-            build_system=block.build_system,
-            layout=layout,
-            prefix=self.prefix,
-            jobs=self.jobs,
-            configure_args=block.configure_args,
-            compiler_flags=block.compiler_flags,
-            project_file=block.project_file,
-            build_args=block.build_args,
-            provides_install_target=block.provides_install_target,
-            binaries=effective_binaries(manifest, install_block),
-            autoreconf=block.autoreconf,
+        commands = self._isolated(
+            manifest.name,
+            build_commands(
+                name=manifest.name,
+                build_system=block.build_system,
+                layout=layout,
+                prefix=self.prefix,
+                jobs=self.jobs,
+                configure_args=block.configure_args,
+                compiler_flags=block.compiler_flags,
+                project_file=block.project_file,
+                build_args=block.build_args,
+                provides_install_target=block.provides_install_target,
+                binaries=effective_binaries(manifest, install_block),
+                autoreconf=block.autoreconf,
+            ),
+            layout,
         )
         if block.install_tree:
             commands.extend(

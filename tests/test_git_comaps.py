@@ -24,6 +24,8 @@ from typing import IO, Any
 
 import pytest
 
+from bunker_fixtures import artifact as catalogue_artifact
+from bunker_fixtures import make_context
 from hammunition.backends import (
     Action,
     BackendError,
@@ -32,8 +34,12 @@ from hammunition.backends import (
     GitBackend,
     RecordingRunner,
 )
-from hammunition.fetch import Fetcher
-from hammunition.manifest.schema import GitInstall, PackageManifest
+from hammunition.fetch import Fetcher, mirror_url
+from hammunition.gitbundles import bundle_name
+from hammunition.manifest.schema import GitInstall, PackageManifest, RemoteArtifact
+from hammunition.payloads import payload_name, payload_path
+from hammunition.resolution import CatalogueMiss
+from test_fetch_mirror import Routes
 
 COMMIT = "72632e4de65a98dfed827d8e447f0287168639d0"
 OTHER = "0" * 40
@@ -79,16 +85,22 @@ class _Transport:
 
 
 def _backend(
-    tmp_path: Path, runner: Any | None = None, body: bytes = WORLD
+    tmp_path: Path,
+    runner: Any | None = None,
+    body: bytes = WORLD,
+    *,
+    fetcher: Fetcher | None = None,
+    context: Any | None = None,
 ) -> tuple[GitBackend, Any]:
     runner = runner or RecordingRunner()
-    fetcher = Fetcher(tmp_path / "cache", transport=_Transport(body))
+    fetcher = fetcher or Fetcher(tmp_path / "cache", transport=_Transport(body))
     backend = GitBackend(
         runner=runner,
         build_root=tmp_path / "build",
         prefix=Path("/usr/local"),
         jobs=3,
         fetcher=fetcher,
+        context=context,
     )
     return backend, runner
 
@@ -347,22 +359,192 @@ def test_an_extra_artifact_is_fetched_verified_and_sized(tmp_path: Path) -> None
     backend, _ = _backend(tmp_path)
     steps = _steps(backend, _manifest(extra_files=[_world()]))
     [fetch] = [s for s in steps if isinstance(s, Action) and s.kind == "fetch"]
-    assert "World.mwm" in fetch.description and str(len(WORLD)) in fetch.detail
+    assert "World.mwm" in fetch.description
+    assert fetch.sources == (_world()["artifact"]["url"],)
     assert "verified" in fetch.perform()
 
 
 def test_an_extra_artifact_of_the_wrong_size_is_refused(tmp_path: Path) -> None:
-    """The digest matched, so the manifest's size is wrong: say so."""
+    """The digest matched, so the manifest's size is wrong: say so, and the
+    copy step (which never runs its own check) is still the step after."""
     world = _world()
     world["artifact"]["size"] = len(WORLD) + 1
     backend, _ = _backend(tmp_path)
+    steps = _steps(backend, _manifest(extra_files=[world]))
+    [fetch] = [s for s in steps if isinstance(s, Action) and s.kind == "fetch"]
+    with pytest.raises(BackendError, match=rf"manifest size {len(WORLD) + 1}, got {len(WORLD)}"):
+        fetch.perform()
+    commands = [s for s in steps if isinstance(s, Command)]
+    put = next(c for c in commands if c.argv[:2] == ("install", "-D"))
+    assert put.argv[-1] == "/usr/local/share/comaps/data/World.mwm"
+    assert steps.index(fetch) < steps.index(put), "the fetch step comes before the copy"
+
+
+# -- extra files try the Bunker mirror first (#381, Task 14) -----------------
+
+
+def test_an_extra_artifact_tries_the_mirror_first(tmp_path: Path) -> None:
+    pin_dict = _world()["artifact"]
+    pin = RemoteArtifact(url=pin_dict["url"], sha256=pin_dict["sha256"])
+    mirrored_at = mirror_url("http://bunker.invalid", payload_path("comaps", pin))
+    routes = Routes({mirrored_at: WORLD})
+    fetcher = Fetcher(
+        tmp_path / "cache",
+        transport=routes,
+        mirror_transport=routes,
+        mirror="http://bunker.invalid",
+    )
+    backend, _ = _backend(tmp_path, fetcher=fetcher)
+    steps = _steps(backend, _manifest(extra_files=[_world()]))
+    [fetch] = [s for s in steps if isinstance(s, Action) and s.kind == "fetch"]
+    assert fetch.sources == (mirrored_at, pin_dict["url"])
+    fetch.perform()
+    assert routes.requested == [mirrored_at]
+    assert fetch.facts["source"] == "mirror"
+
+
+def test_an_extra_artifact_mirror_miss_falls_back_naming_why(tmp_path: Path) -> None:
+    pin_dict = _world()["artifact"]
+    pin = RemoteArtifact(url=pin_dict["url"], sha256=pin_dict["sha256"])
+    mirrored_at = mirror_url("http://bunker.invalid", payload_path("comaps", pin))
+    routes = Routes({mirrored_at: b"tampered", pin_dict["url"]: WORLD})
+    fetcher = Fetcher(
+        tmp_path / "cache",
+        transport=routes,
+        mirror_transport=routes,
+        mirror="http://bunker.invalid",
+    )
+    backend, _ = _backend(tmp_path, fetcher=fetcher)
     [fetch] = [
         s
-        for s in _steps(backend, _manifest(extra_files=[world]))
+        for s in _steps(backend, _manifest(extra_files=[_world()]))
         if isinstance(s, Action) and s.kind == "fetch"
     ]
-    with pytest.raises(BackendError, match="bytes"):
+    outcome = fetch.perform()
+    assert routes.requested == [mirrored_at, pin_dict["url"]]
+    assert fetch.facts["source"] == "publisher"
+    assert "the mirror was passed over" in outcome
+
+
+def test_offline_extra_artifact_preflight_refuses_before_any_build_step(tmp_path: Path) -> None:
+    """The Bunker lacking the pin refuses before `steps()` returns anything,
+    not only when the fetch step is later performed."""
+    context = make_context(tmp_path / "ctx", [])
+    backend, _ = _backend(
+        tmp_path,
+        fetcher=Fetcher(tmp_path / "cache", transport=Routes({}), offline=True),
+        context=context,
+    )
+    with pytest.raises(CatalogueMiss, match="not on Bunker"):
+        _steps(backend, _manifest(extra_files=[_world()]))
+
+
+def test_offline_with_no_context_refuses_before_any_build_step(tmp_path: Path) -> None:
+    """A context-less offline run (``GitBackend(context=None)``) must refuse
+    the same way an offline run with an empty Bunker does, and for the same
+    reason: ``preflight_payloads`` silently does nothing with no context, so
+    this backend has to catch it itself before checkout, build or install
+    ever start, not only when ``_extra_file_steps`` reaches its own fetch."""
+    backend, _ = _backend(
+        tmp_path,
+        fetcher=Fetcher(
+            tmp_path / "cache", transport=Routes({}), offline=True, mirror="http://bunker.invalid"
+        ),
+    )
+    with pytest.raises(BackendError, match="offline") as exc:
+        _steps(backend, _manifest(extra_files=[_world()]))
+    assert "none. Nothing was planned" in str(exc.value)
+
+
+def test_a_context_that_disagrees_and_says_online_also_refuses(tmp_path: Path) -> None:
+    """The fetcher and the context are built from the same ``offline`` flag
+    in the real CLI, but this backend's API does not enforce that: a context
+    that exists but says ``offline=False`` while the fetcher says otherwise
+    is the same hole as no context at all -- ``preflight_payloads`` treats
+    both as "online" and does nothing."""
+    context = make_context(tmp_path / "ctx", [], offline=False)
+    backend, _ = _backend(
+        tmp_path,
+        fetcher=Fetcher(
+            tmp_path / "cache", transport=Routes({}), offline=True, mirror="http://bunker.invalid"
+        ),
+        context=context,
+    )
+    with pytest.raises(BackendError, match="offline") as exc:
+        _steps(backend, _manifest(extra_files=[_world()]))
+    assert "none. Nothing was planned" in str(exc.value)
+
+
+def test_offline_extra_artifact_preflight_passes_with_a_bunker_row(tmp_path: Path) -> None:
+    pin_dict = _world()["artifact"]
+    row = catalogue_artifact("comaps", f"{pin_dict['sha256']}/World.mwm", WORLD)
+    # The main checkout's own root bundle (#381 Task 15): offline, every git
+    # unit now needs one before any step is planned, not only its extras.
+    bundle_row = catalogue_artifact("git-bundles", bundle_name("comaps", COMMIT), b"bundle bytes")
+    context = make_context(tmp_path / "ctx", [row, bundle_row])
+    backend, _ = _backend(
+        tmp_path,
+        fetcher=Fetcher(
+            tmp_path / "cache",
+            transport=Routes({}),
+            offline=True,
+            mirror="http://bunker.invalid",
+        ),
+        context=context,
+    )
+    steps = _steps(backend, _manifest(extra_files=[_world()]))
+    assert [s for s in steps if isinstance(s, Action) and s.kind == "fetch"]
+    assert ("comaps", f"{pin_dict['sha256']}/World.mwm") in context.notes
+
+
+def test_offline_preflight_never_asks_for_a_from_tree_extra(tmp_path: Path) -> None:
+    """A `from_tree` extra names no remote pin, so it needs no Bunker row and
+    its local copy still plans, even offline with an empty catalogue -- the
+    main checkout's own root bundle (#381 Task 15) is the only row needed."""
+    bundle_row = catalogue_artifact("git-bundles", bundle_name("comaps", COMMIT), b"bundle bytes")
+    context = make_context(tmp_path / "ctx", [bundle_row])
+    backend, _ = _backend(
+        tmp_path,
+        fetcher=Fetcher(tmp_path / "cache", transport=Routes({}), offline=True),
+        context=context,
+    )
+    steps = _steps(backend, _manifest(extra_files=[BRANDS]))
+    assert not [s for s in steps if isinstance(s, Action) and s.kind == "fetch"]
+    assert context.notes == {}
+
+
+def test_two_extra_files_sharing_a_basename_fetch_their_own_pin(tmp_path: Path) -> None:
+    """Two extras both named ``World.mwm`` on the publisher but pinned to
+    different bytes must not collide at the same Bunker mirror path."""
+    a_body, b_body = WORLD, b"a different world map\n"
+    a = _world(a_body)
+    b = _world(b_body)
+    b["install_as"] = "share/comaps/data/alt/World.mwm"
+    assert a["artifact"]["url"] == b["artifact"]["url"], "same publisher name, different pins"
+    pin_a = RemoteArtifact(url=a["artifact"]["url"], sha256=a["artifact"]["sha256"])
+    pin_b = RemoteArtifact(url=b["artifact"]["url"], sha256=b["artifact"]["sha256"])
+    assert payload_name(pin_a) != payload_name(pin_b)
+    at_a = mirror_url("http://bunker.invalid", payload_path("comaps", pin_a))
+    at_b = mirror_url("http://bunker.invalid", payload_path("comaps", pin_b))
+    assert at_a != at_b
+    routes = Routes({at_a: a_body, at_b: b_body})
+    fetcher = Fetcher(
+        tmp_path / "cache",
+        transport=routes,
+        mirror_transport=routes,
+        mirror="http://bunker.invalid",
+    )
+    backend, _ = _backend(tmp_path, fetcher=fetcher)
+    fetches = [
+        s
+        for s in _steps(backend, _manifest(extra_files=[a, b]))
+        if isinstance(s, Action) and s.kind == "fetch"
+    ]
+    assert len(fetches) == 2
+    assert fetches[0].sources[0] != fetches[1].sources[0], "distinct mirror paths"
+    for fetch in fetches:
         fetch.perform()
+    assert set(routes.requested) == {at_a, at_b}
 
 
 def test_an_extra_artifact_needs_a_fetcher(tmp_path: Path) -> None:

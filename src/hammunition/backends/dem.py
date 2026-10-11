@@ -271,24 +271,19 @@ class DemTilesBackend:
             fetched: dict[str, str | Path] = {}
             facts: dict[str, str] = {}
             sources: tuple[str, ...]
+            where = MirrorPath(manifest.name, tile.name)
             if tile.etag is not None:
-                # The S3 ETag (D-068): fetched from the publisher only, as US
-                # Topo's sheets are; no LAN mirror path for it.
+                # The S3 ETag (D-068), checked either way (D-070, #381).
                 digest = f"ETag {tile.etag}"
-                note, urls, sources = "", tile.url, ()
+                check = "ETag"
             else:
                 digest = (
                     f"sha256 {tile.sha256[:12]}…"
                     if tile.sha256
                     else f"md5 {(tile.md5 or '')[:12]}…"
                 )
-                note, urls, sources = fetch_disclosure(
-                    self.fetcher,
-                    tile.url,
-                    MirrorPath(manifest.name, tile.name),
-                    "sha256" if tile.sha256 else "md5",
-                )
-            where = MirrorPath(manifest.name, tile.name)
+                check = "sha256" if tile.sha256 else "md5"
+            note, urls, sources = fetch_disclosure(self.fetcher, tile.url, where, check)
             steps.append(
                 Action(
                     kind="fetch",
@@ -371,7 +366,9 @@ class DemTilesBackend:
                 )
                 how = f"sha256 {result.sha256[:12]}… verified against the pin"
             elif tile.etag is not None:
-                result = self.fetcher.fetch_etag(tile.url, tile.etag, expected_size=tile.size)
+                result = self.fetcher.fetch_etag(
+                    tile.url, tile.etag, expected_size=tile.size, mirror=where
+                )
                 how = f"ETag {tile.etag} reproduced (the publisher's, not pinned)"
             elif tile.md5 is not None:
                 result = self.fetcher.fetch_md5(

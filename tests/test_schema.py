@@ -687,11 +687,13 @@ def test_every_profile_package_can_actually_be_installed() -> None:
     )
 
 
-def test_the_twelve_1_0_profiles_exist() -> None:
+def test_the_thirteen_1_0_profiles_exist() -> None:
     """docs/reference/profile-sizing.md argued a specific set and the
     maintainer accepted it on 2026-08-29. Renaming a profile later breaks
     every shell history, forum post and document that names it, so the set is
-    asserted rather than left to drift."""
+    asserted rather than left to drift. `security-keys` joined the 1.0 set
+    under Task 17 (A11) -- an intentional, documented twelfth-to-thirteenth
+    addition, not drift."""
     from hammunition.manifest.load import load_catalog, load_profiles
 
     packages = load_catalog(CATALOG)
@@ -710,6 +712,7 @@ def test_the_twelve_1_0_profiles_exist() -> None:
         "listening",
         "electronics",
         "rf-security",
+        "security-keys",
     }
     assert shipped == expected, (
         f"1.0 profile set changed. missing: {sorted(expected - shipped)}; "

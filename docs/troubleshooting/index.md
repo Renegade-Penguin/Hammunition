@@ -40,6 +40,36 @@ here. Where a fix is distribution-specific it says so.
   `wsjtx-improved` versus the distribution's `wsjtx-data`, by design.
 - **[A package is "refused by name" for a backend/repo](install-failures.md#refused)** —
   not a failure; the engine will not shim an unsupported combination.
+- **[`--offline` or `mirror enrol` says "no Bunker enrolled"](install-failures.md#not-enrolled)** —
+  `station set --mirror` alone does not enrol trust; run `mirror enrol URL`.
+- **[a Bunker catalogue is an "unsupported version"](install-failures.md#unsupported-version)** —
+  the engine does not read that version yet; update it.
+- **["no enrolled signature verified"](install-failures.md#bad-signature)** —
+  every enrolled key failed to verify the exact catalogue bytes; re-enrol
+  with the Bunker's current fingerprint.
+- **["station mirror differs from enrolled mirror"](install-failures.md#url-changed)** —
+  the mirror URL changed since you enrolled; enrol the new one.
+- **["mirror serial cannot be lowered"](install-failures.md#rollback)** —
+  rollback is refused by default; `mirror accept-older` only after a
+  deliberate restore.
+- **[a catalogue is older than 30 days](install-failures.md#stale)** —
+  not a refusal, a warning that the Bunker has not synced recently.
+- **[an entry is missing from a group Bunker](install-failures.md#sharing-filter)** —
+  the sharing filter, not access control; ask the Bunker's operator about
+  its `share` tag.
+- **["RSA … is weak"](install-failures.md#weak-rsa)** —
+  the key still verifies; replace it with Ed25519, ECDSA or RSA 3072+ when
+  convenient.
+- **["no enrolled hardware key signed this catalogue"](install-failures.md#hardware-only)** —
+  the hardware-only policy is on and no enrolled signer qualifies.
+- **[`doctor` says a token is denied or unreachable](install-failures.md#token-access-denied)** —
+  run `doctor` as yourself, without `sudo`, first.
+- **[apt, pip or npm refuses under `--offline`](install-failures.md#offline-apt-pip-npm)** —
+  phase 1 covers data and pinned payloads only; apt and pip offline support
+  is phase 2.
+- **[a mirrored git build refuses over a moved tag or submodule pin](install-failures.md#moved-tag)** —
+  the Bunker's bundle is correct; the manifest's pin or the upstream tag
+  needs attention.
 
 ## Running
 

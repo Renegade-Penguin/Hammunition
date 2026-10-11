@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
 
-from ..fetch import Fetcher
+from ..fetch import Fetcher, MirrorPath, fetch_disclosure, record_fetch
 from ..fstopo import FsQuad, FsQuadFile, FstopoError, parse_row, render_row
 from ..manifest.schema import PackageManifest, RemoteArtifact, TopoQuadsInstall
 from ..topo_bound import bound_line, split_bound
@@ -163,15 +163,24 @@ class FsTopoBackend:
         steps: list[Action | Command] = []
         for sheet in self.resolution.fetch:
             fetched: dict[str, str | Path] = {}
+            facts: dict[str, str] = {}
+            where = MirrorPath(manifest.name, sheet.name)
+            # The sheet's check is its pin (sha256 and size) or, unpinned, its size
+            # and a TIFF's first bytes; the Bunker's copy meets the same one.
+            note, urls, sources = fetch_disclosure(
+                self.fetcher, sheet.url, where, "sha256" if sheet.sha256 else "size"
+            )
             steps.append(
                 Action(
                     kind="fetch",
                     description=(
                         f"Fetch FSTopo quad {sheet.name} ({human_size(sheet.size)}, "
-                        f"{block.licence}) — {sheet.verified_by}"
+                        f"{block.licence}) — {sheet.verified_by}{note}"
                     ),
-                    detail=f"{sheet.url} ({sheet.size} bytes)",
-                    perform=partial(self._fetch, sheet, fetched),
+                    detail=f"{urls} ({sheet.size} bytes)",
+                    perform=partial(self._fetch, sheet, fetched, where, facts),
+                    sources=sources,
+                    facts=facts,
                 )
             )
             dest = out / f"{sheet.name}{TIF}"
@@ -222,15 +231,23 @@ class FsTopoBackend:
             return f"wrote {record}; {no_sheets_line(entry.region)}"
         return f"wrote {record}"
 
-    def _fetch(self, sheet: FsQuadFile, fetched: dict[str, str | Path]) -> str:
+    def _fetch(
+        self,
+        sheet: FsQuadFile,
+        fetched: dict[str, str | Path],
+        where: MirrorPath | None = None,
+        facts: dict[str, str] | None = None,
+    ) -> str:
         try:
             if sheet.sha256:
                 result = self.fetcher.fetch(
-                    RemoteArtifact(url=sheet.url, sha256=sheet.sha256), max_bytes=sheet.size + MIB
+                    RemoteArtifact(url=sheet.url, sha256=sheet.sha256),
+                    max_bytes=sheet.size + MIB,
+                    mirror=where,
                 )
                 how = f"sha256 {sheet.sha256[:12]}… verified against the pin"
             else:
-                result = self.fetcher.fetch_sized(sheet.url, expected_size=sheet.size)
+                result = self.fetcher.fetch_sized(sheet.url, expected_size=sheet.size, mirror=where)
                 how = (
                     f"unverified: {result.size} bytes as announced and a TIFF, sha256 "
                     f"{result.sha256[:12]}… recorded"
@@ -243,8 +260,11 @@ class FsTopoBackend:
             return self.ledger.fail(quad_key(sheet.name), f"{sheet.name}: {exc}")
         fetched["path"] = result.path
         fetched["sha256"] = result.sha256
-        where = "cached" if result.from_cache else "downloaded"
-        return f"{where} {result.size} bytes, {how}"
+        source = record_fetch(
+            result, facts if facts is not None else {}, mirrored=bool(self.fetcher.mirror)
+        )
+        state = "cached" if result.from_cache else "downloaded"
+        return f"{state} {result.size} bytes, {how}{source}"
 
     def _install(
         self, sheet: FsQuadFile, fetched: dict[str, str | Path], dest: Path, writer: PrefixWriter

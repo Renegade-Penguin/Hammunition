@@ -166,3 +166,180 @@ tells you to install that one package by hand. A capability matrix that
 reported coverage the engine does not have would be the lie this rule exists to
 prevent. The rest of your transaction is unaffected; install the named package
 yourself, or choose one that needs no third-party repo.
+
+## Offline Bunker (`--offline`, `mirror enrol`, D-085)
+
+Twelve things a signed Bunker catalogue can refuse on, each with its own
+remedy. None of these disable verification, and `hammunition mirror
+accept-older` is never the unconditional answer to one of them — read the
+message's own reason first. A payload that is simply **not on Bunker** at
+all (never mirrored, or mirrored but not yet there) falls back to the
+publisher without complaint online; the same gap is refused by name,
+"has no Bunker route yet", only under `--offline`.
+
+### <a name="not-enrolled"></a>"no Bunker enrolled"
+
+```text
+no Bunker enrolled; hammunition mirror enrol URL
+```
+
+`--offline` (or an exhausted publisher retry with no mirror enrolled, below)
+needs a Bunker whose keys you have accepted. Setting `station set --mirror
+URL` alone is **not** enrolment — it only gives the D-070 download route.
+Run the command the message names:
+
+```sh
+hammunition mirror enrol http://bunker.lan:8080/
+```
+
+type the fingerprint you trust, and try again.
+
+### <a name="unsupported-version"></a>"unsupported Bunker catalogue version"
+
+```text
+version: unsupported Bunker catalogue version 4; this reader accepts 3
+```
+
+The Bunker is running a newer catalogue format than this engine understands.
+This is not Bunker holding bad data — it is a version this engine has never
+been taught to read. Update the engine to a release that names the newer
+version, or point the Bunker at an older release until you do.
+
+### <a name="bad-signature"></a>"no enrolled signature verified"
+
+```text
+no enrolled signature verified
+```
+
+Every key you enrolled failed to verify the catalogue's exact bytes. This is
+refused, not patched around: do not remove the signature check to get past
+it. Causes, in order of likelihood: the Bunker's signing key changed (its
+operator re-enrolled or rotated keys) and you have not re-enrolled;
+something on the LAN is answering in the Bunker's place; or the catalogue
+was corrupted in transit. Confirm with the Bunker's own operator what
+signed it, then `hammunition mirror enrol URL` again with the current
+fingerprint.
+
+### <a name="url-changed"></a>"station mirror differs from enrolled mirror"
+
+```text
+station mirror differs from enrolled mirror; run hammunition mirror enrol URL
+```
+
+`station set --mirror` was pointed at a different address than the one you
+enrolled keys for. The engine will not silently carry trust for one Bunker
+over to a URL it never verified. Enrol the new address, or set the mirror
+back to the one you already enrolled.
+
+### <a name="rollback"></a>"mirror serial cannot be lowered"
+
+```text
+mirror serial cannot be lowered; hammunition mirror accept-older
+```
+
+The catalogue you just fetched has a lower serial than one you have already
+accepted from this Bunker — normally a sign the Bunker was restored from an
+older backup, or that something is replaying a stale copy. If you *are*
+restoring from a trusted backup on purpose:
+
+```sh
+hammunition mirror accept-older
+```
+
+shows the old and new serial side by side and asks a typed `yes`. Do not run
+this because the message is inconvenient; run it because you know why the
+serial went backward.
+
+### <a name="stale"></a>A catalogue older than 30 days
+
+```text
+WARNING: Bunker catalogue is older than 30 days
+```
+
+Not a refusal — the plan or install proceeds. It means the Bunker has not
+synced with its publishers in over a month, so its recorded metadata (an
+unpinned region's dated file, an unpinned tile's size) may be behind what
+the publisher now has. Sha256-pinned bytes are unaffected; this only touches
+what the Bunker *observed*. Check the Bunker's own schedule if you did not
+expect this.
+
+### <a name="sharing-filter"></a>An entry is missing from a group Bunker
+
+A group Bunker answers 404 for bytes tagged to another operator's enrolment
+id: `X-Hammunition-Enrolment: <id>` is **a sharing filter, not access
+control** (**D-085**) — it travels in clear text over HTTP, and anything on
+the same LAN sending a different id would see different data, not less
+data by any cryptographic guarantee. If an artifact you expect is missing,
+check with the Bunker's operator which `share` it was given (`all` or
+`owner:<enrolment id>`), not the signature or the serial — those are fine.
+
+### <a name="weak-rsa"></a>"RSA … is weak"
+
+```text
+RSA 2048-bit is weak: replace with Ed25519, ECDSA or RSA 3072+
+```
+
+An enrolled key still verifies and is still trusted — this is a warning, not
+a refusal. Generate an Ed25519 or ECDSA key (or an RSA key of 3072 bits or
+more) on the Bunker, enrol it alongside or instead of the weak one, and
+retire the old one from the Bunker's own signing configuration when you are
+ready.
+
+### <a name="hardware-only"></a>"no enrolled hardware key signed this catalogue"
+
+```text
+no enrolled hardware key signed this catalogue
+```
+
+`station set --mirror-require-hardware-key` is on, and nothing that signed
+this catalogue is an enrolled `sk-*` key or a key you affirmed as
+hardware-backed at enrolment. Either enrol a hardware signer from this
+Bunker, or turn the policy off:
+
+```sh
+hammunition station set --no-mirror-require-hardware-key
+```
+
+if a file key is an acceptable trade-off for this machine.
+
+### <a name="token-access-denied"></a>`hammunition doctor` says a token is denied or unreachable
+
+```text
+token access denied or unmeasured; inspect the archive's device rules
+```
+
+`doctor` could not reach a FIDO2 or PIV token as *you*, without `sudo`. If
+you ran `doctor` as root or through `sudo`, run it again as yourself first —
+that is the other message, "user access unmeasured: run hammunition doctor
+as yourself, without sudo". If you already did and it still says this, the
+distribution's own udev rules for the token are the thing to inspect; this
+page does not write or change them, and `hammunition doctor` never signs a
+test message to find out.
+
+### <a name="offline-apt-pip-npm"></a>"apt and pip offline" / an npm step refuses under `--offline`
+
+```text
+tlf: offline: needs apt package(s) this machine does not have: libhamlib4
+```
+
+Phase 1's Bunker covers data and pinned payloads only. An apt package the
+machine does not already have, a pip resolution, an npm install, or a
+third-party apt repository addition still needs the network, and
+`--offline` refuses each by name rather than fail partway through. Run the
+unit online once, or wait for apt and pip Bunker support, which is phase 2.
+
+### <a name="moved-tag"></a>A mirrored git build refuses over a moved tag or a missing submodule pin
+
+```text
+tag v2026.08.31 no longer resolves to the commit it is pinned to: a1b2c3…, got d4e5f6…
+```
+
+The Bunker's bundle is bit-for-bit what it recorded, but the upstream tag
+has since been re-pointed to a different commit — the engine will not
+silently trust whichever commit the tag resolves to today. [Open an
+issue](https://github.com/Renegade-Penguin/Hammunition/issues) naming the
+package; the manifest's pin needs updating to the tag's current commit, or
+to a plain SHA. A submodule the manifest marks `submodules: true` but whose
+gitlink has no matching `.gitmodules` entry in the mirrored tree refuses the
+same way, for the same reason: the Bunker and the manifest disagree about
+what the build needs, and the engine will not guess which one is right.

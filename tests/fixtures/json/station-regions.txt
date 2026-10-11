@@ -10,6 +10,7 @@ Station configuration: <config>/hammunition/station.yml
   rig_ptt_line   (not set)
   map regions    2 set
   map freshness  monthly
+  mirror_require_hardware_key no
   mirror         (not set)
   dem_source     copernicus
   topo radius    100 km (the default)

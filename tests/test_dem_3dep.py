@@ -25,11 +25,12 @@ from hammunition.backends.dem import (
     read_record,
 )
 from hammunition.copernicus import UNPINNED, CopernicusError, TileFile
-from hammunition.fetch import Fetcher, FetchResult
+from hammunition.fetch import Fetcher, FetchResult, MirrorPath, mirror_url
 from hammunition.geofabrik import GeofabrikError
 from hammunition.manifest.schema import DemTilesInstall, PackageManifest
 from hammunition.terrain_plan import poly_url, resolve_bare_earth
 from hammunition.usgs3dep import parse_tile_list, tile_url
+from test_fetch_mirror import Routes
 
 BODY = b"e" * 12
 MD5 = hashlib.md5(BODY, usedforsecurity=False).hexdigest()
@@ -133,9 +134,13 @@ class FakeFetcher(Fetcher):
     def __init__(self, cache: Path) -> None:
         super().__init__(cache)
         self.calls: list[tuple[str, str, int]] = []
+        self.mirrors: list[MirrorPath | None] = []
 
-    def fetch_etag(self, url: str, etag: str, *, expected_size: int) -> FetchResult:
+    def fetch_etag(
+        self, url: str, etag: str, *, expected_size: int, mirror: MirrorPath | None = None
+    ) -> FetchResult:
         self.calls.append((url, etag, expected_size))
+        self.mirrors.append(mirror)
         path = self.etag_path_for(url, etag)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(BODY)
@@ -235,3 +240,77 @@ def test_a_provider_with_no_backend_is_refused_not_skipped(tmp_path: Path) -> No
     )
     with pytest.raises(Exception, match="usgs-3dep"):
         _steps(lone, manifest("dem-3dep", "usgs-3dep"))
+
+
+# --- the Bunker mirror (#381, Task 12) -----------------------------------------------
+
+BUNKER = "http://bunker.lan:8080"
+SINGLE = TileFile(NAME, tile_url(NAME), len(BODY), None, None, MD5)
+
+
+def _mirrored(tmp_path: Path, routes: Routes, **kw: Any) -> DemTilesBackend:
+    fetcher = Fetcher(tmp_path / "cache", transport=routes, mirror=BUNKER, **kw)
+    three = DemTilesBackend(
+        fetcher=fetcher,
+        prefix=tmp_path,
+        resolution=DemResolution(regions=(RegionTiles(*OCEANIA, (NAME,), 0),), fetch=(SINGLE,)),
+        provider="usgs-3dep",
+    )
+    return DemTilesBackend(
+        fetcher=fetcher, prefix=tmp_path, resolution=DemResolution(), bare_earth=three
+    )
+
+
+def test_a_3dep_tile_asks_the_mirror_first_by_its_name_and_keeps_its_etag_check(
+    tmp_path: Path,
+) -> None:
+    at_mirror = mirror_url(BUNKER, MirrorPath("dem-3dep", NAME))
+    assert at_mirror == f"{BUNKER}/dem-3dep/{NAME}"
+    routes = Routes({at_mirror: BODY})
+    backend = _mirrored(tmp_path, routes)
+    steps = _steps(backend, manifest("dem-3dep", "usgs-3dep"))
+    fetch = next(s for s in steps if s.kind == "fetch")
+    assert fetch.sources == (at_mirror, SINGLE.url)
+    assert "LAN mirror first" in fetch.description and UNPINNED in fetch.description
+    assert "the ETag is checked either way" in fetch.description
+    assert fetch.detail.startswith(f"{at_mirror}, then {SINGLE.url} (ETag {MD5}")
+    outcomes = [s.perform() for s in steps]
+    assert routes.requested == [at_mirror]
+    assert fetch.facts == {"source": "mirror", "fetched_from": at_mirror}
+    assert any("ETag" in o and "not pinned" in o and "from the LAN mirror" in o for o in outcomes)
+    assert (_data(tmp_path) / f"{NAME}{TIF}").read_bytes() == BODY
+    assert backend.ledger.failed == {}
+
+
+def test_a_3dep_tile_with_a_wrong_etag_from_the_mirror_falls_back_online_and_fails_offline(
+    tmp_path: Path,
+) -> None:
+    at_mirror = mirror_url(BUNKER, MirrorPath("dem-3dep", NAME))
+    wrong = b"w" * len(BODY)
+    online = Routes({at_mirror: wrong, SINGLE.url: BODY})
+    fetch = next(
+        s
+        for s in _steps(_mirrored(tmp_path / "on", online), manifest("dem-3dep", "usgs-3dep"))
+        if s.kind == "fetch"
+    )
+    fetch.perform()
+    assert online.requested == [at_mirror, SINGLE.url] and fetch.facts["source"] == "publisher"
+    assert "ETag" in fetch.facts["mirror_failure"]
+    off = Routes({at_mirror: wrong, SINGLE.url: BODY})
+    backend = _mirrored(tmp_path / "off", off, offline=True)
+    outcomes = [s.perform() for s in _steps(backend, manifest("dem-3dep", "usgs-3dep"))]
+    assert any(o.startswith("FAILED, the rest continues") for o in outcomes)
+    assert SINGLE.url not in off.requested
+    assert not (_data(tmp_path / "off") / f"{NAME}{TIF}").exists()
+
+
+def test_without_a_mirror_the_3dep_step_reads_as_it_did(tmp_path: Path) -> None:
+    backend, fetcher = _pair(
+        tmp_path, DemResolution(regions=(RegionTiles(*OCEANIA, (NAME,), 0),), fetch=(TILE,))
+    )
+    fetch = next(s for s in _steps(backend, manifest("dem-3dep", "usgs-3dep")) if s.kind == "fetch")
+    assert fetch.sources == (TILE.url,) and "mirror" not in fetch.description
+    assert fetch.detail == f"{TILE.url} (ETag {MD5}-2, 12 bytes)"
+    outcome = fetch.perform()
+    assert "mirror" not in outcome and fetch.facts == {"source": "publisher"}
+    assert fetcher.mirrors == [MirrorPath("dem-3dep", NAME)]
