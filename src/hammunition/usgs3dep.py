@@ -188,7 +188,8 @@ def check_tile(
     """:func:`_check_tile_online`, or with a *context* the Bunker's record when
     the bucket cannot be asked. *row* is never replaced."""
     if context is None:
-        return _check_tile_online(row, probe)
+        _check_tile_online(row, probe)
+        return
     if unit is None:
         raise CopernicusError("3DEP catalogue check needs its resolved unit name")
     return context.choose(

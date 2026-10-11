@@ -235,8 +235,14 @@ def test_the_empty_version_orders_below_everything_and_equals_itself() -> None:
 # -- the CLI's check over a real .deb field ------------------------------------
 
 
+class _NoRunner:
+    def run(self, command: Command) -> CommandResult:  # pragma: no cover
+        raise AssertionError("no command is run here")
+
+
 class StubApt(AptBackend):
     def __init__(self, installed: dict[str, str]) -> None:
+        super().__init__(_NoRunner())
         self.installed = installed
 
     def probe(self, packages: Any) -> dict[str, AptPackageState]:

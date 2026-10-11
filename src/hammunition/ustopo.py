@@ -313,7 +313,8 @@ def check_quad(
     the bucket cannot be asked. Nothing on *quad* is replaced: the download is
     still checked against the index's ETag and size."""
     if context is None:
-        return _check_quad_online(quad, probe)
+        _check_quad_online(quad, probe)
+        return
     if unit is None:
         raise UstopoError("US Topo catalogue check needs its resolved unit name")
     return context.choose(
