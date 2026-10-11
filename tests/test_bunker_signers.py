@@ -291,6 +291,7 @@ def test_existing_lock_wrong_owner(
         ("operator", "x", os.geteuid() + 1, os.getegid(), "", str(tmp_path), "/bin/sh")
     )
     monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(os, "getuid", lambda: 0)  # store_uid reads the real id (c77ae5e9)
     monkeypatch.setattr(pwd, "getpwnam", lambda name: entry)
     with pytest.raises(SignerError, match="another account"):
         load_mirror(path, owner="operator")

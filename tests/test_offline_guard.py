@@ -61,6 +61,15 @@ from test_offline_context import (  # noqa: F401  (machine is a fixture)
 
 cli = importlib.import_module("hammunition.cli.main")
 
+
+@pytest.fixture(autouse=True)
+def _sandbox_probe_says_bwrap_works(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests cover the guard's resolution logic, not whether the host
+    allows unprivileged user namespaces (a hosted runner's AppArmor policy does
+    not). The plan-time probe is faked as "works"; the tests that cover the
+    refusal fake it as "none" themselves, after this runs."""
+    monkeypatch.setattr(cli.netiso, "detect", lambda *a, **k: "bwrap")
+
 REPO = Path(__file__).resolve().parents[1]
 REAL_CATALOG = REPO / "catalog"
 
