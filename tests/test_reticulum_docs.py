@@ -202,13 +202,14 @@ def test_the_shared_instance_is_per_machine_in_the_record_the_row_and_the_fragme
     assert "every console script `rns` 1.5.6 declares (14)" in decision
 
 
-def test_the_guide_and_the_page_warn_that_an_old_pip_or_pipx_reticulum_is_overwritten() -> None:
-    """D-022: coexist, disclose, never remove silently. The venv backend writes
-    its wrappers over ~/.local/bin and follows a pipx symlink."""
+def test_the_guide_and_the_page_say_an_old_pip_or_pipx_reticulum_blocks_the_install() -> None:
+    """D-022, #288: the plan refuses by name a ~/.local/bin command the engine did
+    not write; the docs must say that, and must not say it overwrites."""
     guide = _flat(_text(GUIDE))
     for needle in (
         "installed Reticulum with pip or pipx",
-        "replace `~/.local/bin/rnsd`",
+        "plan stops",
+        "never replaces or writes through",
         "pipx uninstall rns",
         "python3 -m pip uninstall rns",
         "does not bring the old one back",
@@ -216,7 +217,10 @@ def test_the_guide_and_the_page_warn_that_an_old_pip_or_pipx_reticulum_is_overwr
         assert needle in guide, needle
     rns = load_catalog(ROOT / "catalog" / "packages")["rns"].documentation.known_problems
     assert rns is not None
-    assert "pipx uninstall rns" in _flat(rns) and "does not bring the old one back" in _flat(rns)
+    flat = _flat(rns)
+    assert "blocks the install, by name" in flat and "pipx uninstall rns" in flat
+    assert "does not bring the old one back" in flat
+    assert "is overwritten" not in flat and "is overwritten" not in guide
 
 
 def test_nothing_is_claimed_not_to_transmit_on_a_network_and_the_autointerface_can_be_scoped() -> (
