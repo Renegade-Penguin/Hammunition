@@ -1,1 +1,0 @@
-- `docs/reference/cli.md`: the `artifacts` default unit list now names `repeater-snapshots`, which the command has listed since D-078 (branch `artifacts-doc-default`).

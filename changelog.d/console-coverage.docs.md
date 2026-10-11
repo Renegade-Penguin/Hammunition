@@ -1,1 +1,0 @@
-- Console coverage (#323): `docs/reference/console-coverage.md` is generated from the CLI's argparse tree against `hammunition.console.coverage`, and `tests/console/test_coverage.py` fails on an unclassified verb, a covered verb its screen does not name, or a growing uncovered list (31 verbs still have no screen, each with its issue).

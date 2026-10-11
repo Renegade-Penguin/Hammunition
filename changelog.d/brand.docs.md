@@ -1,1 +1,0 @@
-- The Hammunition logo (drawn by the maintainer 2026-10-05) and a brand package in Hill's layout: `brand/` marks, favicons, social preview and a sampled palette, the README and site headers, the site favicon, and `docs/contributing/branding.md` (#374).

@@ -1,1 +1,0 @@
-- D-084: targets are releases in regular support (Debian 12 not planned, Kali best effort, LTS and stable preferred); the uConsole image is the one exception to "no custom ISO", conditional on Debian 13 not being documentable onto the device (epic #372).
