@@ -47,6 +47,10 @@ install:
 
 depends: [python3-venv]
 
+# Disclosed in the uninstall plan, never removed (#289).
+left_in_place:
+  - ~/.lxmd
+
 update:
   probe:
     method: pypi
