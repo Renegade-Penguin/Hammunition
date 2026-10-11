@@ -10498,6 +10498,27 @@ unit's `expose` names:
   operator (dotfiles layouts; no privilege boundary is crossed) and refused
   by name when it runs as root for an operator, through the existing
   `open_operator_dir` walk.
+- **A command name is one safe basename (review round 2).** `expose` (and a
+  node unit's `command`) is validated in the schema: non-empty, at most 64
+  characters, no `/` or `\\`, not `.` or `..`, no leading `-`, no control or
+  format character (Unicode class C*, NUL and ESC included). A manifest naming
+  `../../x` or `/etc/profile.d/x.sh` is refused at load; the writer and the
+  conflict check look again (`wrapper_name_problem`): the name must be a safe
+  basename and the path's parent exactly the bin directory, so an object built
+  around validation still cannot leave `~/.local/bin`.
+- **The mode does not depend on the umask.** `os.open`'s 0755 is filtered by
+  the umask (077 gave 0700, 111 gave 0644, 777 gave 0000), so the writer
+  `fchmod`s the temporary (and the no-hard-link fallback's file) to 0755 on its
+  own descriptor before the name is published.
+- **Uninstall goes through a descriptor too.** `_remove_if_ours` opens the
+  entry's directory (as root for an operator, every component `O_NOFOLLOW`
+  through `open_existing_operator_dir`, so a linked `~/.local/bin` is refused
+  by name; as the operator a linked directory is followed, as above), opens the
+  leaf `O_NOFOLLOW|O_NONBLOCK` relative to it, reads the marker from that
+  descriptor and unlinks with `dir_fd` only if the name is still the inode that
+  was read. Residual: the two system calls between that comparison and the
+  `unlink` can be raced by a process with the operator's uid, which could
+  delete the file itself; Linux has no unlink-by-inode.
 - **What this cannot claim.** A file whose bytes are exactly a wrapper of ours
   is indistinguishable from one of ours; the check proves "the file we would
   have written", not "we wrote it". The residual race: between the last check

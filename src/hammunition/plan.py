@@ -2328,7 +2328,7 @@ def venv_wrapper_blockers(plan: InstallPlan, bin_dir: Path) -> list[Blocker]:
                 )
                 continue
             claimed[script] = unit
-            conflict = wrapper_conflict(bin_dir / script, unit)
+            conflict = wrapper_conflict(bin_dir / script, unit, bin_dir)
             if conflict is not None:
                 blockers.append(
                     Blocker(

@@ -52,7 +52,12 @@ from typing import TYPE_CHECKING
 
 from hammunition.backends.base import Action, BackendError, Command
 from hammunition.backends.source import SourceLayout, extract, tree_install_commands
-from hammunition.manifest.schema import PackageManifest, RemoteArtifact, VenvInstall
+from hammunition.manifest.schema import (
+    PackageManifest,
+    RemoteArtifact,
+    VenvInstall,
+    command_name_problem,
+)
 from hammunition.paths import (
     OperatorDirError,
     open_operator_dir,
@@ -238,13 +243,37 @@ def _open_bin_dir(path: Path, *, create: bool) -> int | None:
         raise WrapperRefused(f"{path} cannot be opened: {exc.strerror or exc}") from exc
 
 
-def wrapper_conflict(path: Path, unit: str) -> str | None:
+def wrapper_name_problem(path: Path, bin_dir: Path | None = None) -> str | None:
+    """Why *path* is not a wrapper directly inside the operator's ``bin`` directory.
+
+    The schema already refuses an unsafe ``expose`` name; this is the second
+    look, on the path itself, for an object built around validation. The name
+    must be one safe basename and the path's parent exactly *bin_dir* (lexically:
+    no ``..`` component can be hiding in it, and an absolute name that discarded
+    *bin_dir* when joined is caught by the parent mismatch). Without *bin_dir*
+    a ``..`` component anywhere in the path is refused.
+    """
+    problem = command_name_problem(path.name)
+    if problem is not None:
+        return f"the command name {path.name!r} {problem}"
+    if ".." in path.parts:
+        return f"{path} has a '..' component and could leave the bin directory"
+    if bin_dir is not None and path.parent != bin_dir:
+        return f"{path} is not directly inside {bin_dir}"
+    return None
+
+
+def wrapper_conflict(path: Path, unit: str, bin_dir: Path | None = None) -> str | None:
     """Why *path* is not Hammunition's to replace, or None when it is free or ours.
 
     Read-only and creating nothing: the plan calls it for every exposed name
     before any step runs, so a conflict is a refusal by name and not a failure
-    in the middle of a transaction.
+    in the middle of a transaction. A name that would leave *bin_dir* is a
+    conflict too (:func:`wrapper_name_problem`).
     """
+    misplaced = wrapper_name_problem(path, bin_dir)
+    if misplaced is not None:
+        return f"{unit} cannot put {path} on the PATH: {misplaced}"
     fd = _open_bin_dir(path.parent, create=False)
     if fd is None:
         return None
@@ -255,7 +284,7 @@ def wrapper_conflict(path: Path, unit: str) -> str | None:
     return _refusal(path, unit, why) if state == "foreign" else None
 
 
-def write_wrapper(path: Path, target: Path, unit: str) -> str:
+def write_wrapper(path: Path, target: Path, unit: str, bin_dir: Path | None = None) -> str:
     """A two-line exec wrapper onto the operator's PATH -- only ever our own.
 
     The ownership rule (#288, D-022) and what stands behind it:
@@ -285,6 +314,9 @@ def write_wrapper(path: Path, target: Path, unit: str) -> str:
     the plan; a ``~/.local/bin`` swapped for a link between plan and write is
     followed as the operator's own (see :func:`_open_bin_dir`).
     """
+    misplaced = wrapper_name_problem(path, bin_dir)
+    if misplaced is not None:
+        raise WrapperRefused(f"{unit} cannot put {path} on the PATH: {misplaced}")
     fd = _open_bin_dir(path.parent, create=True)
     assert fd is not None
     temporary = f".{path.name}.hammunition-{os.getpid()}-{secrets.token_hex(4)}"
@@ -293,15 +325,18 @@ def write_wrapper(path: Path, target: Path, unit: str) -> str:
         state, why = _classify(fd, path.name, unit)
         if state == "foreign":
             raise WrapperRefused(_refusal(path, unit, why))
-        # Mode 0755 (owner-executable even under a strict umask is the umask's
-        # to decide; the engine does not widen it).
+        # os.open's mode is filtered by the umask (077 -> 0700, 111 -> 0644,
+        # 777 -> 0000), so the mode is set on the descriptor before the name is
+        # published: a wrapper that is not executable is a success that did
+        # nothing. fchmod on our own fresh descriptor cannot be redirected.
         tfd = os.open(
             temporary,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
-            0o755,
+            _WRAPPER_MODE,
             dir_fd=fd,
         )
         made = True
+        os.fchmod(tfd, _WRAPPER_MODE)
         with os.fdopen(tfd, "wb") as handle:
             handle.write(wrapper_text(unit, target).encode(_TEXT_ENCODING))
         # The look that matters: after the temporary exists, immediately
@@ -341,7 +376,7 @@ def _publish_new(fd: int, temporary: str, path: Path) -> None:
         nfd = os.open(
             path.name,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
-            0o755,
+            _WRAPPER_MODE,
             dir_fd=fd,
         )
     except FileExistsError as exc:
@@ -350,6 +385,7 @@ def _publish_new(fd: int, temporary: str, path: Path) -> None:
             f"not write it. It is left alone."
         ) from exc
     try:
+        os.fchmod(nfd, _WRAPPER_MODE)
         with (
             os.fdopen(nfd, "wb") as handle,
             os.fdopen(
@@ -362,6 +398,9 @@ def _publish_new(fd: int, temporary: str, path: Path) -> None:
             os.unlink(path.name, dir_fd=fd)
         raise
 
+
+#: What a wrapper is published as, whatever the umask: owner-writable, executable by all.
+_WRAPPER_MODE = 0o755
 
 #: errnos that mean "this filesystem has no hard links", as opposed to a real failure.
 _NO_HARD_LINKS = (errno.EPERM, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EMLINK, errno.EXDEV)
@@ -461,7 +500,7 @@ class VenvBackend:
                     kind="wrapper",
                     description=f"Put {script} on the operator's PATH",
                     detail=f"{wrapper} execs {target}",
-                    perform=partial(write_wrapper, wrapper, target, manifest.name),
+                    perform=partial(write_wrapper, wrapper, target, manifest.name, self.bin_dir),
                 )
             )
         return steps

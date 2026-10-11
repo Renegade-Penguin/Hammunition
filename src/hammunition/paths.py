@@ -350,6 +350,30 @@ def open_operator_dir(path: Path, owner: str | None = None) -> int | None:
     return fd
 
 
+def open_existing_operator_dir(path: Path, owner: str | None = None) -> int | None:
+    """A descriptor on *path* when it exists, walked the way :func:`open_operator_dir` walks.
+
+    For reading or removing what is already there on the operator's behalf
+    (uninstall): every component under their home is opened ``O_NOFOLLOW`` and
+    checked, nothing is created, and None means *path* (or an ancestor) does
+    not exist. Raises :class:`OperatorDirError` for a link or a directory that
+    is not the operator's. Not root, or not under another account's home: the
+    plain case, the path is opened as given and a symlink is followed -- the
+    operator's own layout. The caller closes the descriptor.
+    """
+    entry = _operator_home(path, owner)
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
+    if entry is None:
+        try:
+            return os.open(path, flags)
+        except (FileNotFoundError, NotADirectoryError):
+            return None
+    fd, refusal = _walk(path, entry, create=False)
+    if refusal is not None:
+        raise OperatorDirError(refusal)
+    return fd
+
+
 def ensure_operator_dir(path: Path, owner: str | None = None) -> None:
     """``mkdir -p`` that leaves the operator's directories the operator's.
 
