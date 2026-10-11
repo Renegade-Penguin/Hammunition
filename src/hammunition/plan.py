@@ -52,6 +52,7 @@ from hammunition.backends.apt import downgrades_refused
 from hammunition.backends.apt_repo import AptRepoBackend, RepoState
 from hammunition.backends.pmtiles import TILEMAKER_FLOOR
 from hammunition.backends.source import DEFAULT_PREFIX, IMPLEMENTED_BUILD_SYSTEMS
+from hammunition.backends.venv import wrapper_conflict
 from hammunition.deferral import Deferral
 from hammunition.desktop import Desktop, SessionScan, describe_set
 from hammunition.distro import Target
@@ -124,6 +125,7 @@ __all__ = [
     "preflight_data",
     "resolve",
     "valid_deb_version",
+    "venv_wrapper_blockers",
 ]
 
 REQUESTED_DIRECTLY = "requested"
@@ -2950,3 +2952,63 @@ def resolve(
         apt_from_release=apt_from_release,
         apt_repos=tuple(repo_additions),
     )
+
+
+def venv_wrapper_blockers(plan: InstallPlan, bin_dir: Path) -> list[Blocker]:
+    """Every command name a venv unit would put in *bin_dir* that is not Hammunition's to take.  #288.
+
+    D-022: coexist, disclose, never replace silently. A pipx install of
+    ``rns`` leaves ``rnsd`` and its siblings in ``~/.local/bin`` as symlinks
+    into pipx's own venv, and ``pip install --user`` leaves real scripts; a
+    wrapper written over either damages another tool's install. So each name
+    is looked at here, before any step runs, and every one that is somebody
+    else's is named (not just the first), with what to do about it.
+
+    Ownership is the wrapper's header (:func:`~hammunition.backends.venv.
+    wrapper_conflict`): a file whose bytes are exactly what this backend
+    writes is replaced, anything else is refused. Two units in one
+    transaction exposing one name are refused as well, since neither would
+    own the result. A forged header cannot be told from ours -- the check
+    proves "this is the file we would have written", not "we wrote it".
+
+    Read-only: nothing is created, so a plan on a machine with no
+    ``~/.local/bin`` leaves it that way. The write re-checks
+    (:func:`~hammunition.backends.venv.write_wrapper`); this is the one that
+    can refuse before anything has run.
+    """
+    blockers: list[Blocker] = []
+    claimed: dict[str, str] = {}
+    for planned in plan.packages:
+        install = planned.block.install
+        if not isinstance(install, VenvInstall):
+            continue
+        unit = planned.name
+        for script in install.expose:
+            if script in claimed and claimed[script] != unit:
+                blockers.append(
+                    Blocker(
+                        subject=unit,
+                        reason=(
+                            f"{unit} and {claimed[script]} both expose the command {script}, so "
+                            f"{bin_dir / script} would belong to whichever installed last"
+                        ),
+                        remedy=f"Install one of {claimed[script]} and {unit}, not both.",
+                    )
+                )
+                continue
+            claimed[script] = unit
+            conflict = wrapper_conflict(bin_dir / script, unit, bin_dir)
+            if conflict is not None:
+                blockers.append(
+                    Blocker(
+                        subject=unit,
+                        reason=conflict,
+                        remedy=(
+                            f"If it came from pipx or pip, remove that install first "
+                            f"(`pipx uninstall {unit}` or `python3 -m pip uninstall {unit}`), "
+                            f"or move {bin_dir / script} aside, then run the install again. "
+                            f"Hammunition will not remove or replace it for you."
+                        ),
+                    )
+                )
+    return blockers

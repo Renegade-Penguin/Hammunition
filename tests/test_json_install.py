@@ -201,6 +201,33 @@ def test_a_refusal_after_resolution_is_a_refused_plan_with_its_reason(
     ]
 
 
+def test_a_foreign_venv_wrapper_is_a_refused_plan_naming_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#288: a pipx symlink in ~/.local/bin blocks the transaction at plan
+    time, by name, as a plan document, and nothing is written."""
+    from test_venv_wrapper_ownership import plan_of, unit
+
+    _machine(monkeypatch, tmp_path)
+    home = tmp_path / "home"
+    (home / ".local" / "bin").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    pipx = tmp_path / "pipx-rnsd"
+    pipx.write_text("#!/usr/bin/python3\n")
+    (home / ".local" / "bin" / "rnsd").symlink_to(pipx)
+    monkeypatch.setattr(cli, "resolve", lambda *args, **kwargs: plan_of(unit("rns", ["rnsd"])))
+    rc, out = _run(capsys, "install", "--dry-run", "--json", "rns")
+    doc = parse_one(out)
+    validate(doc)
+    assert rc == cli.EXIT_UNPLANNABLE
+    assert doc["outcome"] == "refused" and doc["install"] is None
+    (blocker,) = doc["blockers"]
+    assert blocker["subject"] == "rns" and "rnsd" in blocker["reason"]
+    assert "symbolic link" in blocker["reason"] and "pipx uninstall" in blocker["remedy"]
+    assert pipx.read_text() == "#!/usr/bin/python3\n"
+    assert (home / ".local" / "bin" / "rnsd").is_symlink()
+
+
 # D-060: a unit for one desktop, on a machine whose session files name another.
 # A throwaway catalog, so the shared fixture catalog's goldens do not move.
 

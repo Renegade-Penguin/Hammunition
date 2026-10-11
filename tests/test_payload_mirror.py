@@ -526,6 +526,52 @@ def test_a_venv_payload_keeps_its_build_script_and_pip_steps(tmp_path: Path) -> 
     assert any(isinstance(s, Action) and s.kind == "requirements" for s in steps)
 
 
+def test_an_offline_payload_venv_still_refuses_a_foreign_command_in_the_bin_dir(
+    tmp_path: Path,
+) -> None:
+    """#288 x the Bunker: the payload steps come first, the wrapper step last, and a
+    foreign ``~/.local/bin`` entry is refused by the write and left untouched."""
+    pin = _pin()
+    manifest = _manifest(
+        "venvunit",
+        {
+            "method": "venv",
+            "requirements": [HASHED],
+            "payload": pin.model_dump(exclude_none=True),
+            "payload_build_script": "build.sh",
+            "tree_marker": "run.py",
+            "expose": ["venvunit"],
+        },
+    )
+    block = manifest.install[0].install
+    assert isinstance(block, VenvInstall)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    foreign = bin_dir / "venvunit"
+    foreign.write_text("#!/usr/bin/python3\nimport venvunit\n")
+    fetcher = _fetcher(tmp_path, Routes({}), offline=True)
+    fetcher.path_for(pin).parent.mkdir(parents=True)
+    fetcher.path_for(pin).write_bytes(BODY)
+    context = make_context(
+        tmp_path / "ctx", [catalogue_artifact("venvunit", payload_name(pin), BODY)]
+    )
+    backend = VenvBackend(
+        venv_root=tmp_path / "venvs",
+        bin_dir=bin_dir,
+        fetcher=fetcher,
+        build_root=tmp_path / "build",
+        prefix=tmp_path / "prefix",
+        context=context,
+    )
+    steps = backend.steps(manifest, block)
+    kinds = [s.kind for s in steps if isinstance(s, Action)]
+    assert kinds.index("wrapper") > kinds.index("fetch")
+    wrapper = next(s for s in steps if isinstance(s, Action) and s.kind == "wrapper")
+    with pytest.raises(BackendError):
+        wrapper.perform()
+    assert foreign.read_text() == "#!/usr/bin/python3\nimport venvunit\n"
+
+
 def test_a_node_payload_keeps_its_script_protections_and_fetches_no_runtime(
     tmp_path: Path,
 ) -> None:

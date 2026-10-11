@@ -943,6 +943,45 @@ class BinaryInstall(Strict):
         return self
 
 
+#: The longest command name a manifest may expose onto the operator's PATH.
+COMMAND_NAME_MAX = 64
+
+
+def command_name_problem(name: str) -> str | None:
+    """Why *name* is not one safe basename for ``~/.local/bin``, or None when it is.
+
+    An exposed command (a venv's ``expose``, a node unit's ``command``) is
+    joined onto the operator's ``bin`` directory. ``../../x`` or an absolute
+    path would leave it -- as root under sudo, onto a login path -- so a name
+    is one component: non-empty, no ``/`` or ``\\``, not ``.`` or ``..``, no
+    control or format character (Unicode class C*, NUL and ESC included), no
+    leading ``-`` (an option to whatever reads it), and short.
+    """
+    if not name:
+        return "is empty"
+    if len(name) > COMMAND_NAME_MAX:
+        return f"is longer than {COMMAND_NAME_MAX} characters"
+    if name in (".", ".."):
+        return "is a directory entry, not a command name"
+    if "/" in name or "\\" in name:
+        return "contains a path separator"
+    if name.startswith("-"):
+        return "starts with '-'"
+    if any(unicodedata.category(ch).startswith("C") for ch in name):
+        return "contains a control or format character"
+    return None
+
+
+def _checked_command_name(name: str, field: str) -> str:
+    problem = command_name_problem(name)
+    if problem is not None:
+        raise ManifestError(
+            f"{field} {name!r} {problem}; a command name is one plain file name "
+            f"(it is placed in the operator's ~/.local/bin and nowhere else)"
+        )
+    return name
+
+
 class VenvInstall(Strict):
     """A per-user Python virtualenv, hash-pinned end to end.
 
@@ -996,7 +1035,9 @@ class VenvInstall(Strict):
         description=(
             "Console-script names from the venv's bin/ to wrap onto the "
             "operator's PATH (~/.local/bin). A venv nobody can invoke installs "
-            "nothing while reporting success."
+            "nothing while reporting success. Each is one plain file name: no "
+            "path separator, not . or .., no control character, no leading -, "
+            "at most 64 characters."
         ),
     )
     licence: str | None = Field(
@@ -1014,6 +1055,13 @@ class VenvInstall(Strict):
         default=None,
         description="Where those terms are stated, on the publisher's site. Requires licence.",
     )
+
+    @field_validator("expose")
+    @classmethod
+    def _expose_names_are_basenames(cls, value: list[str]) -> list[str]:
+        for name in value:
+            _checked_command_name(name, "a venv block's expose entry")
+        return value
 
     @model_validator(mode="after")
     def _licence_has_its_url(self) -> VenvInstall:
@@ -1132,6 +1180,13 @@ class NodeInstall(Strict):
             "engine sets is one line of upstream away from meaning nothing."
         ),
     )
+
+    @field_validator("command")
+    @classmethod
+    def _command_is_a_basename(cls, value: str | None) -> str | None:
+        if value is not None:
+            _checked_command_name(value, "a node block's command")
+        return value
 
     @model_validator(mode="after")
     def _host_is_ours(self) -> NodeInstall:
