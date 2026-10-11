@@ -10877,3 +10877,55 @@ neither re-implements the other's half.
 paragraph states the policy in one sentence; `docs/hardware/uconsole.md`
 points at the epic. The `uconsole` profile named in SCOPE since D-003 is
 defined as part of #372. Nothing in the engine changes under this decision.
+
+## D-086 — A plan says what a user service does on its first start, and an uninstall plan names what it leaves in place; both are manifest text, validated and cleaned, shown and never acted on
+
+**Date:** 2026-10-11. **Status:** proposed until merged (issue #289, deferred
+from the final review of `reticulum-core`, ruling H5). **Depends on:** D-073
+(user services), D-080 (Reticulum), D-004 (uninstall is not a time machine),
+D-078 (the operator's own data stays theirs). The number D-085 is held by the
+open offline-Bunker branch.
+
+**The gap.** The plan for `hammunition-rnsd` printed one `systemctl --user
+enable` line. Its first start does more: `rnsd` writes `~/.reticulum/config`
+with the AutoInterface on, which announces on every link-local interface, and
+creates the operator's identity. `hammunition uninstall rns` removes the unit,
+the venv and the wrappers and leaves `~/.reticulum`, `~/.nomadnetwork`,
+`~/.lxmd` and `~/.rnsh`. The guide said so; the engine's own output did not,
+and the plan is the page an operator reads before saying yes.
+
+**Two optional manifest fields.**
+
+- `user_services[].first_start`: one line of plain text, at most 400
+  characters, printed under the service in *User services* as `first start:`.
+- `left_in_place`: a list of at most 16 paths, each `~/` then plain components
+  (no `..`, no glob, no variable, no whitespace, at most 120 characters, no
+  duplicates), printed by the uninstall plan as *Left in place by design* for
+  a unit the removal actually removes something of. Listed whether or not the
+  path exists yet: it is the catalog's statement, not a probe of the home
+  directory.
+
+**Manifest text is semi-trusted and ends up in a terminal.** The schema refuses
+any character in Unicode category `C*` (ESC, C1 including the 8-bit CSI, NUL,
+bell, newline, tab, bidi overrides) rather than a list of known-bad ones, and
+refuses blank and over-length text. The plan builder then runs the text through
+the console's `clean()` again, collapses whitespace and cuts to the same cap,
+so a manifest built any way but the loader cannot reach a terminal raw, and
+the `--json` document carries the same cleaned string the text shows.
+
+**Shown, never acted on.** `left_in_place` is read only by the plan builder.
+No removal step, no transaction-log entry and no backend consumes it; a test
+holds that a directory named there survives the planned steps. A unit without
+either field plans and prints exactly as before; the JSON gains
+`first_start` (an empty string when absent) on each user-service line and
+`left_in_place` (empty) on the removal view.
+
+**Catalog.** `rns` states the AutoInterface first start and lists the four
+directories; `lxmf` lists `~/.lxmd` and `nomadnet` `~/.nomadnetwork`, so
+removing either alone is disclosed too.
+
+**Residual risk.** The text is the manifest author's claim and is not checked
+against what the program does; a wrong `first_start` is a catalog bug found by
+the measurement the author records, as for every other disclosure. The
+home-relative paths are not expanded or stat'ed, so a name that does not match
+the program's real directory is only caught by review.

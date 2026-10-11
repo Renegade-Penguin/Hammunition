@@ -91,6 +91,22 @@ user_services:
       - "{venv}/bin/rnsd"
       - --service
     restart: on-failure
+    # Printed under the service in the plan (#289). The same facts are in the
+    # documentation below; the plan is where an operator reads them first.
+    first_start: >-
+      On first start rnsd writes ~/.reticulum/config itself, with the
+      AutoInterface on, so it announces on every link-local interface of this
+      machine (UDP 29716 and 42671), and it creates your Reticulum identity
+      there. Hammunition writes neither and never edits them.
+
+# What `hammunition uninstall rns` leaves behind (#289): everything the programs
+# in this venv create under the operator's home. Disclosure only; the engine
+# never deletes, moves or reads these.
+left_in_place:
+  - ~/.reticulum
+  - ~/.nomadnetwork
+  - ~/.lxmd
+  - ~/.rnsh
 
 update:
   probe:

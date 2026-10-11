@@ -35,6 +35,7 @@ A manifest is **strict**: an unknown field is an error, not ignored. That is del
 | `system_modifications` | `list[SystemModification]` | no |  |
 | `config_files` | `list[ConfigFile]` | no |  |
 | `user_services` | `list[UserService]` | no | systemd user services the engine renders from station values, enables, and reverses on uninstall (D-073 §6). Rendered into the operator's ~/.config/systemd/user/; deferred when a station value is missing, like config_files. |
+| `left_in_place` | `list[str]` | no | Paths under the operator's home that this unit's software creates and `hammunition uninstall` deliberately does not remove (`~/.reticulum`). Named in the uninstall plan so nobody finds out afterwards. Disclosure only: nothing in the engine reads these to delete, move or touch them. Each is `~/` and plain path components, no `..`, no glob, no control character; at most 16, each at most 120 characters (#289). |
 | `debconf_selections` | `list[str]` | no | debconf preseed lines applied BEFORE the apt install, so a package's postinst reads them instead of taking a default that needs an interactive answer. Each line is '<package> <question> <type> <value>', the debconf-set-selections format. The one measured need: wireshark, whose non-root capture is off by default and whose group and dumpcap capabilities are only created when wireshark-common/install-setuid is preseeded true (measured on Debian 13, 2026-09-01). |
 | `reconfigure_after` | `list[str]` | no | Packages to `dpkg-reconfigure` non-interactively AFTER the apt install. Paired with `debconf_selections` for the case where a postinst action depends on another package in the same transaction: wireshark-common's setcap of dumpcap needs libcap2-bin, and apt does not guarantee it is configured first, so the reconfigure re-runs the action once the whole transaction is settled (measured on Debian 13, 2026-09-01). |
 | `scope` | `Literal[system, user]` | no (default `system`) |  |
@@ -814,6 +815,7 @@ the CAT service and the PTT-only service are two complete services chosen by
 | `restart` | `Literal[on-failure, always, no]` | no (default `on-failure`) | systemd's Restart=, from a fixed set; never free text in a unit file. |
 | `restart_sec` | `int` | no (default `5`) | RestartSec=, in seconds (1 to 300). |
 | `restart_prevent_exit_status` | `list[Annotated[int, annotation=NoneType required=True metadata=[Ge(ge=1), Le(le=255)]]]` | no | Exit codes systemd must not restart after (RestartPreventExitStatus=): a program that refuses by exiting 1, such as the tether on a taken port, is not retried forever. |
+| `first_start` | `str \| None` | no | What the service does the first time it starts that the operator would not guess from its name: files it writes outside the engine's own paths, an identity it creates, an interface it opens. Printed under the service in the install plan. One line of plain text, at most 400 characters, no control characters (#289). |
 
 ### `UserServiceListen`
 

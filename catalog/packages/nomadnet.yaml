@@ -54,6 +54,10 @@ install:
 
 depends: [python3-venv]
 
+# Disclosed in the uninstall plan, never removed (#289).
+left_in_place:
+  - ~/.nomadnetwork
+
 # A terminal program: the menu entry opens a terminal window and the wrapper
 # holds it open at exit, as the engine's other terminal launchers do.
 launchers:

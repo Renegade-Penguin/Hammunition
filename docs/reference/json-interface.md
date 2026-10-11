@@ -3081,6 +3081,7 @@ rest of the plan.
 | `fills` | list of string | the station values that fed it, by name; never the values |
 | `listen` | string | the loopback address:port it binds, e.g. 127.0.0.1:4532 |
 | `starts_now` | boolean | whether the plan restarts it now (a rig service whose radio's port is present) |
+| `first_start` | string | what the service does the first time it starts, from the manifest: files it writes, an identity it creates, an interface it opens; empty when the manifest says nothing. Plain text, control characters removed, at most 400 characters |
 
 #### `DesktopsReadView`
 
@@ -3160,6 +3161,7 @@ Everything an uninstall will do, section by section as the text prints it.
 | `artifacts` | list of [`ArtifactLine`](#artifactline) | files and trees removed |
 | `left_unattributed` | list of [`UnitFiles`](#unitfiles) | present, but the log does not attribute it |
 | `left_foreign` | list of [`UnitPackages`](#unitpackages) | installed, but not by this engine |
+| `left_in_place` | list of [`UnitFiles`](#unitfiles) | paths the unit's manifest says uninstall leaves in the operator's home (`~/.reticulum`); shown, never removed, whether or not they exist yet |
 | `already_absent` | list of [`UnitPackages`](#unitpackages) | nothing to remove |
 | `not_reversed` | string | what uninstall does not undo, by design (D-004) |
 | `commands` | list of [`StepView`](#stepview) | every step, in order |
@@ -4492,6 +4494,13 @@ A unit and files.
           "title": "Left Foreign",
           "type": "array"
         },
+        "left_in_place": {
+          "items": {
+            "$ref": "#/$defs/UnitFiles"
+          },
+          "title": "Left In Place",
+          "type": "array"
+        },
         "already_absent": {
           "items": {
             "$ref": "#/$defs/UnitPackages"
@@ -4516,6 +4525,7 @@ A unit and files.
         "artifacts",
         "left_unattributed",
         "left_foreign",
+        "left_in_place",
         "already_absent",
         "not_reversed",
         "commands"
@@ -5243,6 +5253,10 @@ A unit and files.
         "starts_now": {
           "title": "Starts Now",
           "type": "boolean"
+        },
+        "first_start": {
+          "title": "First Start",
+          "type": "string"
         }
       },
       "required": [
@@ -5252,7 +5266,8 @@ A unit and files.
         "exec",
         "fills",
         "listen",
-        "starts_now"
+        "starts_now",
+        "first_start"
       ],
       "title": "UserServiceLine",
       "type": "object"
