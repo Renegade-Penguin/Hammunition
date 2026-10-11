@@ -52,13 +52,13 @@ from typing import TYPE_CHECKING
 
 from hammunition.backends.base import Action, BackendError, Command
 from hammunition.backends.source import SourceLayout, extract, tree_install_commands
+from hammunition.manifest.schema import PackageManifest, RemoteArtifact, VenvInstall
 from hammunition.paths import (
     OperatorDirError,
     open_operator_dir,
     operator_dir_problem,
     operator_for,
 )
-from hammunition.manifest.schema import PackageManifest, RemoteArtifact, VenvInstall
 
 if TYPE_CHECKING:
     # Type-only: `hammunition.backends/__init__.py` imports this module
@@ -350,11 +350,13 @@ def _publish_new(fd: int, temporary: str, path: Path) -> None:
             f"not write it. It is left alone."
         ) from exc
     try:
-        with os.fdopen(nfd, "wb") as handle:
-            with os.fdopen(
+        with (
+            os.fdopen(nfd, "wb") as handle,
+            os.fdopen(
                 os.open(temporary, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=fd), "rb"
-            ) as source:
-                handle.write(source.read())
+            ) as source,
+        ):
+            handle.write(source.read())
     except BaseException:
         with contextlib.suppress(OSError):
             os.unlink(path.name, dir_fd=fd)

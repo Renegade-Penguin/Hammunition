@@ -35,7 +35,7 @@ import pytest
 
 from hammunition.backends import BackendError, VenvBackend
 from hammunition.backends.base import Action
-from hammunition.backends.venv import write_wrapper, wrapper_text
+from hammunition.backends.venv import wrapper_text, write_wrapper
 from hammunition.distro import Target
 from hammunition.manifest.schema import PackageManifest, VenvInstall
 from hammunition.plan import InstallPlan, PlannedPackage, venv_wrapper_blockers
