@@ -358,6 +358,11 @@ class RemovalPlan:
     installed unit still needs them: the tray's device helper, which both tray
     units install."""
 
+    left_in_place: dict[str, list[str]] = field(default_factory=dict)
+    """Unit name -> the home paths its manifest says uninstall leaves (#289).
+    Disclosure only, copied from the manifest for a unit this removal actually
+    removes something of; nothing reads these to delete."""
+
     apt_packages: tuple[str, ...] = field(init=False)
     """The flat, sorted set the single ``apt-get remove`` will name."""
 
@@ -724,6 +729,12 @@ def plan_removal(
                 ),
             )
 
+    left_in_place: dict[str, list[str]] = {}
+    for unit in dict.fromkeys(units):
+        declared = catalog[unit].left_in_place
+        if declared and (to_remove.get(unit) or artifacts.get(unit)):
+            left_in_place[unit] = list(declared)
+
     if blockers:
         raise RemovalError("this removal cannot be planned:\n  " + "\n  ".join(sorted(blockers)))
     return RemovalPlan(
@@ -733,4 +744,5 @@ def plan_removal(
         artifacts=artifacts,
         left_unattributed=left_unattributed,
         kept_shared=kept_shared,
+        left_in_place=left_in_place,
     )

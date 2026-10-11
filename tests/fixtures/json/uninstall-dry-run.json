@@ -52,6 +52,7 @@
         ]
       }
     ],
+    "left_in_place": [],
     "already_absent": [
       {
         "unit": "fixture-source",
