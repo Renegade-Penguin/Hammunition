@@ -10504,7 +10504,7 @@ unit's `expose` names:
   and `rename()` over an existing name of ours, a process with the operator's
   uid can substitute a file and have it replaced (no write is redirected, and
   that uid could edit the file in place anyway); a new name has no such
-  window. Same stance as `prepare_tree` in `backends/source.py`. The node
+  window. Same stance as `prepare_tree` in `src/hammunition/backends/source.py`. The node
   backend's wrapper writer has the same `write_text` shape and is not
   changed here.
 
