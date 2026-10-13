@@ -972,6 +972,58 @@ def command_name_problem(name: str) -> str | None:
     return None
 
 
+#: What a node wrapper can hold (#406). The wrapper is four lines, one a shell
+#: assignment list, and it is replaced on reinstall only if the engine
+#: recognises its own text: a key that is not a shell name would be code, a
+#: newline would break the line shape, and an oversize wrapper would pass the
+#: 4096-byte cap. This layer refuses, at load, what is wrong whatever the
+#: machine, and bounds the size of plain ASCII values: NODE_ENV_TOTAL_MAX leaves the
+#: rest of the 4096 bytes for the fixed lines, the entry and a long tree path.
+#: It does not bound quote-heavy values (``shlex.quote`` turns each ``'`` into
+#: five characters), non-ASCII ones (bytes, not characters, count against the
+#: cap) or the tree path, which only the plan-time check
+#: (``wrapper_blockers(node_root=...)``) and the writer know; those two layers
+#: are the authority.
+NODE_ENV_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
+NODE_ENV_VALUE_MAX = 256
+NODE_ENV_MAX = 16
+NODE_ENV_TOTAL_MAX = 2500  # sum of key and value lengths
+NODE_ENTRY_MAX = 128
+
+
+def _plain_text_problem(text: str) -> str | None:
+    if any(unicodedata.category(ch).startswith("C") for ch in text):
+        return "contains a control or format character (a newline included)"
+    return None
+
+
+def node_wrapper_problem(entry: str, env: dict[str, str]) -> str | None:
+    """Why a node unit's ``entry``/``env`` cannot be baked into its wrapper, or None."""
+    if not entry or entry.startswith("-"):
+        return f"entry {entry!r} is empty or starts with '-' (an option to node)"
+    if len(entry) > NODE_ENTRY_MAX:
+        return f"entry is longer than {NODE_ENTRY_MAX} characters"
+    bad = _plain_text_problem(entry)
+    if bad is not None:
+        return f"entry {entry!r} {bad}"
+    if len(env) > NODE_ENV_MAX:
+        return f"env has {len(env)} variables; at most {NODE_ENV_MAX}"
+    if sum(len(k) + len(v) for k, v in env.items()) > NODE_ENV_TOTAL_MAX:
+        return f"env keys and values total more than {NODE_ENV_TOTAL_MAX} characters"
+    for key, value in env.items():
+        if NODE_ENV_KEY.fullmatch(key) is None:
+            return (
+                f"env key {key!r} is not a shell variable name "
+                f"([A-Za-z_][A-Za-z0-9_]*, at most 64 characters)"
+            )
+        if len(value) > NODE_ENV_VALUE_MAX:
+            return f"env value for {key} is longer than {NODE_ENV_VALUE_MAX} characters"
+        bad = _plain_text_problem(value)
+        if bad is not None:
+            return f"env value for {key} {bad}"
+    return None
+
+
 def _checked_command_name(name: str, field: str) -> str:
     problem = command_name_problem(name)
     if problem is not None:
@@ -1190,6 +1242,9 @@ class NodeInstall(Strict):
 
     @model_validator(mode="after")
     def _host_is_ours(self) -> NodeInstall:
+        problem = node_wrapper_problem(self.entry, self.env)
+        if problem is not None:
+            raise ManifestError(f"a node block's wrapper cannot hold it: {problem} (#406)")
         if "HOST" in self.env:
             raise ManifestError(
                 "a node block may not set HOST — the engine binds every node "
