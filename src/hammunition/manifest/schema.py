@@ -975,11 +975,19 @@ def command_name_problem(name: str) -> str | None:
 #: What a node wrapper can hold (#406). The wrapper is four lines, one a shell
 #: assignment list, and it is replaced on reinstall only if the engine
 #: recognises its own text: a key that is not a shell name would be code, a
-#: newline would break the line shape, and an oversize value would pass the
-#: wrapper size cap. Refused here, at load, rather than on the second install.
+#: newline would break the line shape, and an oversize wrapper would pass the
+#: 4096-byte cap. This layer refuses, at load, what is wrong whatever the
+#: machine, and bounds the size of plain ASCII values: NODE_ENV_TOTAL_MAX leaves the
+#: rest of the 4096 bytes for the fixed lines, the entry and a long tree path.
+#: It does not bound quote-heavy values (``shlex.quote`` turns each ``'`` into
+#: five characters), non-ASCII ones (bytes, not characters, count against the
+#: cap) or the tree path, which only the plan-time check
+#: (``wrapper_blockers(node_root=...)``) and the writer know; those two layers
+#: are the authority.
 NODE_ENV_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
 NODE_ENV_VALUE_MAX = 256
 NODE_ENV_MAX = 16
+NODE_ENV_TOTAL_MAX = 2500  # sum of key and value lengths
 NODE_ENTRY_MAX = 128
 
 
@@ -1000,6 +1008,8 @@ def node_wrapper_problem(entry: str, env: dict[str, str]) -> str | None:
         return f"entry {entry!r} {bad}"
     if len(env) > NODE_ENV_MAX:
         return f"env has {len(env)} variables; at most {NODE_ENV_MAX}"
+    if sum(len(k) + len(v) for k, v in env.items()) > NODE_ENV_TOTAL_MAX:
+        return f"env keys and values total more than {NODE_ENV_TOTAL_MAX} characters"
     for key, value in env.items():
         if NODE_ENV_KEY.fullmatch(key) is None:
             return (

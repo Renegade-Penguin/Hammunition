@@ -31,7 +31,12 @@ import pytest
 
 from hammunition.backends import BackendError
 from hammunition.backends.base import Action
-from hammunition.backends.node import node_ownership, node_wrapper_text, write_wrapper
+from hammunition.backends.node import (
+    node_ownership,
+    node_wrapper_text,
+    unrecognised_wrapper,
+    write_wrapper,
+)
 from hammunition.backends.venv import WrapperRefused, wrapper_conflict, wrapper_text
 from hammunition.distro import Target
 from hammunition.manifest.schema import NodeInstall, PackageManifest
@@ -679,3 +684,43 @@ def test_a_planted_regular_file_at_the_temporary_name_is_not_reused(
     with pytest.raises(FileExistsError):
         put(bindir / "nodeunit-server")
     assert temporary.read_text() == FOREIGN
+
+
+# -- round 3: the load-time budget, and bytes not characters -------------------
+
+
+def test_the_repro_that_loaded_cleanly_and_rendered_over_the_cap_is_refused_at_load() -> None:
+    """16 variables of 256 plain characters: each within its own limit, 4302 bytes together."""
+    env = {f"K{i}": "x" * 256 for i in range(16)}
+    assert len(node_wrapper_text("nodeunit", TREE, "server.js", env)) > 4096
+    with pytest.raises(ValueError, match="env"):
+        unit(env=env)
+
+
+def test_a_manifest_at_the_plain_value_limit_loads_plans_clean_and_reinstalls(
+    bindir: Path, tmp_path: Path
+) -> None:
+    per_value = (2500 - 16 * 3) // 16
+    env = {f"K{i:02d}": "x" * per_value for i in range(16)}
+    m = unit(env=env, entry="e" * 128)  # loads: the budget holds
+    assert wrapper_blockers(plan_of(m), bindir, node_root=tmp_path / "node") == []
+    put(bindir / "nodeunit-server", env=env)
+    put(bindir / "nodeunit-server", env=env)
+    assert len((bindir / "nodeunit-server").read_bytes()) < 4096
+    assert wrapper_blockers(plan_of(m), bindir, node_root=tmp_path / "node") == []
+
+
+def test_one_byte_over_the_budget_is_refused_at_load() -> None:
+    per_value = (2500 - 16 * 3) // 16
+    env = {f"K{i:02d}": "x" * per_value for i in range(16)}
+    env["K00"] += "x" * 5
+    with pytest.raises(ValueError, match="env"):
+        unit(env=env)
+
+
+def test_the_size_cap_is_counted_and_reported_in_bytes_not_characters() -> None:
+    env = {f"K{i}": "é" * 256 for i in range(14)}  # two bytes each
+    body = node_wrapper_text("nodeunit", TREE, "server.js", env)
+    assert len(body) <= 4096 < len(body.encode()), "the fixture must separate bytes from characters"
+    problem = unrecognised_wrapper(body, "nodeunit", "nodeunit-server")
+    assert problem is not None and f"{len(body.encode())} bytes" in problem

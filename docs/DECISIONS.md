@@ -10566,13 +10566,23 @@ wrapper the rule would not accept is one every later install refuses to replace,
 so a value the writer can emit but the rule cannot read would turn the first
 install into a permanent conflict. Closed at three layers: the manifest
 validator refuses a node block whose `entry` or `env` could not be baked in
-(`node_wrapper_problem`: no control or format character, a newline included; env
-keys are shell variable names, so a key can no longer be code; entry not starting
-with `-`; at most 16 variables, 256-character values, 128-character entry); the
-plan renders the wrapper for the real tree path and refuses by name when the
-text would not recognise itself or would exceed the 4096-byte wrapper cap
-(`wrapper_blockers(..., node_root=...)`), before any step runs; and the writer
-checks the same thing before touching the directory.
+(`node_wrapper_problem`: no character in any Unicode "C" category, which is
+control and format characters, a newline included, and also unassigned,
+private-use and surrogate code points, stricter than needed and kept on
+purpose; env keys are shell variable names, so a key can no longer be code;
+entry not starting with `-`; at most 16 variables, 256-character values, a
+128-character entry, and 2500 characters of keys plus values in total). What
+that layer guarantees is exactly this: a manifest with plain ASCII values (no
+embedded quote characters) always renders under the 4096-byte cap with room for
+a long tree path. It does **not** bound quote-heavy values (`shlex.quote` writes
+each `'` as five characters), non-ASCII values (counted in characters here, in
+bytes against the cap) or the tree path. Those two are the plan's and the
+writer's: the plan renders the wrapper for the real tree path and refuses by
+name when the text would not recognise itself or would exceed the 4096-byte cap
+(`wrapper_blockers(..., node_root=...)`, bytes, not characters), before any step
+runs; and the writer checks the same thing before touching the directory. Those
+two layers are the authority; the load-time layer only refuses early what is
+wrong on every machine.
 
 The residual stands unchanged and is not closed here: between the last check and
 `rename()` over an existing name of ours, a process with the operator's uid can

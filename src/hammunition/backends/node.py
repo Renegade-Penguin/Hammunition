@@ -233,9 +233,10 @@ def unrecognised_wrapper(body: str, unit: str, name: str) -> str | None:
     reinstall would fail until the operator deleted it (#406 round 2). The size
     cap is the other way to get there. None when the text round-trips.
     """
-    if len(body.encode("utf-8")) > MAX_WRAPPER_BYTES:
+    size = len(body.encode("utf-8"))
+    if size > MAX_WRAPPER_BYTES:
         return (
-            f"the wrapper would be {len(body)} characters, over the {MAX_WRAPPER_BYTES} a "
+            f"the wrapper would be {size} bytes, over the {MAX_WRAPPER_BYTES} a "
             f"wrapper may be, so a later install would not recognise it"
         )
     if node_ownership(body, unit, name) != ("ours", ""):
