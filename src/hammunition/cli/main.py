@@ -5809,7 +5809,9 @@ def cmd_install(args: argparse.Namespace) -> int:
     # answer for (a deferred unit writes no wrapper, so it cannot collide),
     # where the operator's bin directory is known and nothing has run; the
     # write looks again.
-    foreign_wrappers = wrapper_blockers(plan, user_bin_dir(user or None))
+    foreign_wrappers = wrapper_blockers(
+        plan, user_bin_dir(user or None), node_root=node_root(user or None)
+    )
     if foreign_wrappers:
         return plan_refusal(PlanError(foreign_wrappers))
     step_owners = StepOwners()

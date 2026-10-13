@@ -50,7 +50,7 @@ from hammunition.backends import (
 )
 from hammunition.backends.apt import downgrades_refused
 from hammunition.backends.apt_repo import AptRepoBackend, RepoState
-from hammunition.backends.node import node_ownership
+from hammunition.backends.node import node_ownership, node_wrapper_text, unrecognised_wrapper
 from hammunition.backends.pmtiles import TILEMAKER_FLOOR
 from hammunition.backends.source import DEFAULT_PREFIX, IMPLEMENTED_BUILD_SYSTEMS
 from hammunition.backends.venv import wrapper_conflict
@@ -2956,7 +2956,9 @@ def resolve(
     )
 
 
-def wrapper_blockers(plan: InstallPlan, bin_dir: Path) -> list[Blocker]:
+def wrapper_blockers(
+    plan: InstallPlan, bin_dir: Path, node_root: Path | None = None
+) -> list[Blocker]:
     """Every command name a venv or node unit would put in *bin_dir* that is not Hammunition's to take.  #288, #406.
 
     D-022: coexist, disclose, never replace silently. A pipx install of
@@ -2978,6 +2980,12 @@ def wrapper_blockers(plan: InstallPlan, bin_dir: Path) -> list[Blocker]:
     node_ownership`), and a venv name and a node name that coincide are one
     collision (#406).
 
+    Given *node_root*, a node unit's wrapper is also rendered for real and held
+    to the engine's own rule: text its ownership check would not accept (a
+    control character in a value, a key that is not a shell name, a path or
+    environment that pushes it over the size cap) is a blocker now, because the
+    first install would write it and every reinstall would then refuse it.
+
     Read-only: nothing is created, so a plan on a machine with no
     ``~/.local/bin`` leaves it that way. The write re-checks
     (:func:`~hammunition.backends.venv.write_wrapper`); this is the one that
@@ -2996,6 +3004,25 @@ def wrapper_blockers(plan: InstallPlan, bin_dir: Path) -> list[Blocker]:
         else:
             continue
         unit = planned.name
+        if isinstance(install, NodeInstall) and node_root is not None:
+            problem = unrecognised_wrapper(
+                node_wrapper_text(unit, node_root / unit, install.entry, dict(install.env)),
+                unit,
+                names[0],
+            )
+            if problem is not None:
+                blockers.append(
+                    Blocker(
+                        subject=unit,
+                        reason=(
+                            f"{unit}'s wrapper {bin_dir / names[0]} cannot be written: {problem}"
+                        ),
+                        remedy=(
+                            "This is a defect in the package definition (its entry or env), "
+                            "not something to fix on this machine; report it."
+                        ),
+                    )
+                )
         for script in names:
             if script in claimed and claimed[script] != unit:
                 blockers.append(

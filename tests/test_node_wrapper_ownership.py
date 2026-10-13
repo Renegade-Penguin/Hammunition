@@ -23,13 +23,15 @@ import os
 import signal
 import stat
 from collections.abc import Iterator
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from hammunition.backends import BackendError
-from hammunition.backends.node import node_wrapper_text, write_wrapper
+from hammunition.backends.base import Action
+from hammunition.backends.node import node_ownership, node_wrapper_text, write_wrapper
 from hammunition.backends.venv import WrapperRefused, wrapper_conflict, wrapper_text
 from hammunition.distro import Target
 from hammunition.manifest.schema import NodeInstall, PackageManifest
@@ -41,7 +43,9 @@ FOREIGN = "#!/usr/bin/node\nconsole.log('someone else');\n"
 TREE = Path("/h/node/nodeunit")
 
 
-def unit(name: str = "nodeunit", command: str | None = "nodeunit-server") -> PackageManifest:
+def unit(
+    name: str = "nodeunit", command: str | None = "nodeunit-server", **overrides: Any
+) -> PackageManifest:
     install: dict[str, Any] = {
         "method": "node",
         "artifact": {"url": "https://example.invalid/nodeunit-1.0.tar.gz", "sha256": DIGEST},
@@ -50,6 +54,7 @@ def unit(name: str = "nodeunit", command: str | None = "nodeunit-server") -> Pac
     }
     if command is not None:
         install["command"] = command
+    install.update(overrides)
     return PackageManifest.model_validate(
         {
             "name": name,
@@ -474,3 +479,203 @@ def test_a_foreign_node_wrapper_is_a_refused_plan_naming_it(
     assert "symbolic link" in blocker["reason"]
     assert other.read_text() == FOREIGN
     assert (home / ".local" / "bin" / "nodeunit-server").is_symlink()
+
+
+# -- round 2 (PR #411): what the validator accepts must round-trip -------------
+
+GOOD_VALUES = [
+    "3001",
+    "",
+    "has space",
+    "it's quoted",
+    'dq "quote"',
+    "$HOME `x` $(y)",
+    "semi;colon && pipe | amp &",
+    "back\\slash",
+    "unicod\u00e9 \u2603",
+    "x" * 256,
+    "'" * 100,
+]
+BAD_VALUES = ["a\nb", "a\rb", "a\x00b", "a\tb", "a\x1bb", "a\u200bb", "x" * 257]
+BAD_KEYS = ["A;touch /tmp/pwn;B", "1A", "A B", "A=b", "", "a-b", "A\nB", "A$(x)", "K" * 65]
+
+
+@pytest.mark.parametrize("value", GOOD_VALUES)
+def test_every_accepted_env_value_reinstalls_over_our_own_wrapper(bindir: Path, value: str) -> None:
+    m = unit(env={"TITLE": value})  # the validator accepts it
+    install = m.install[0].install
+    assert isinstance(install, NodeInstall)
+    put(bindir / "nodeunit-server", env=dict(install.env))
+    first = (bindir / "nodeunit-server").read_text()
+    assert node_ownership(first, "nodeunit", "nodeunit-server") == ("ours", "")
+    put(bindir / "nodeunit-server", env=dict(install.env), tree=Path("/h/other tree's/x"))
+    assert listing(bindir) == ["nodeunit-server"]
+
+
+@pytest.mark.parametrize("value", BAD_VALUES)
+def test_an_env_value_the_wrapper_cannot_hold_is_refused_at_manifest_load(value: str) -> None:
+    with pytest.raises(ValueError, match="env"):
+        unit(env={"TITLE": value})
+
+
+@pytest.mark.parametrize("key", BAD_KEYS)
+def test_an_env_key_that_is_not_a_shell_name_is_refused_at_manifest_load(key: str) -> None:
+    with pytest.raises(ValueError, match="env"):
+        unit(env={key: "1"})
+
+
+@pytest.mark.parametrize("entry", ["a\nb", "-e", "", "x" * 129, "a\x00b"])
+def test_an_entry_the_wrapper_cannot_hold_is_refused_at_manifest_load(entry: str) -> None:
+    with pytest.raises(ValueError, match="entry"):
+        unit(entry=entry)
+
+
+def test_too_many_env_variables_are_refused_at_manifest_load() -> None:
+    with pytest.raises(ValueError, match="env"):
+        unit(env={f"K{i}": "1" for i in range(17)})
+
+
+def hostile(**fields: Any) -> PackageManifest:
+    """A manifest built around validation, the way a bug elsewhere could."""
+    good = unit()
+    install = good.install[0].install
+    assert isinstance(install, NodeInstall)
+    forged = install.model_copy(update=fields)
+    block = good.install[0].model_copy(update={"install": forged})
+    return good.model_copy(update={"install": [block]})
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"env": {"TITLE": "a\nb"}},
+        {"env": {"A;touch /tmp/pwn;B": "1"}},
+        {"entry": "a\nb"},
+        {"env": {"BIG": "'" * 900}},  # quotes to 5x: over the size cap
+    ],
+)
+def test_a_wrapper_the_engine_would_refuse_to_reinstall_is_a_plan_blocker(
+    bindir: Path, tmp_path: Path, fields: dict[str, Any]
+) -> None:
+    m = hostile(**fields)
+    (blocker,) = wrapper_blockers(plan_of(m), bindir, node_root=tmp_path / "node")
+    assert blocker.subject == "nodeunit"
+    assert "would not recognise" in blocker.reason and "nodeunit-server" in blocker.reason
+    assert listing(bindir) == [], "refused before anything exists"
+
+
+def test_a_long_tree_path_is_a_plan_blocker_not_a_write_time_surprise(
+    bindir: Path, tmp_path: Path
+) -> None:
+    (blocker,) = wrapper_blockers(plan_of(unit()), bindir, node_root=tmp_path / ("d" * 5000))
+    assert "would not recognise" in blocker.reason
+
+
+def test_a_clean_unit_has_no_self_consistency_blocker(bindir: Path, tmp_path: Path) -> None:
+    assert wrapper_blockers(plan_of(unit(env={"PORT": "1"})), bindir, node_root=tmp_path) == []
+
+
+def test_the_writer_refuses_text_its_own_rule_would_not_recognise(bindir: Path) -> None:
+    with pytest.raises(WrapperRefused, match="would not recognise"):
+        put(bindir / "nodeunit-server", env={"A;touch /tmp/pwn;B": "1"})
+    with pytest.raises(WrapperRefused, match="would not recognise"):
+        put(bindir / "nodeunit-server", env={"T": "a\nb"})
+    assert listing(bindir) == []
+
+
+# -- the ownership rule is the writer's shape, not just a header ---------------
+
+OLD = (
+    "#!/bin/sh\n# generated by hammunition for nodeunit\ncd /h/node/nodeunit || exit 1\n"
+    'PORT=3001 HOST=127.0.0.1 exec node server.js "$@"\n'
+)
+
+
+def test_the_shape_every_older_writer_produced_is_still_ours() -> None:
+    """9a6f3b23 (the first node writer) to 53bdb1d3 wrote exactly this shape: one
+    quoted cd target, shlex-quoted K=V assignments, HOST last, quoted entry."""
+    assert node_ownership(OLD, "nodeunit", "x") == ("ours", "")
+    quoted = (
+        "#!/bin/sh\n# generated by hammunition for nodeunit\n"
+        "cd '/h/a dir/it'\"'\"'s' || exit 1\n"
+        "TITLE='my shack; rm -rf /' HOST=127.0.0.1 exec node 'my entry.js' \"$@\"\n"
+    )
+    assert node_ownership(quoted, "nodeunit", "x") == ("ours", "")
+    no_env = OLD.replace("PORT=3001 ", "")
+    assert node_ownership(no_env, "nodeunit", "x") == ("ours", "")
+
+
+@pytest.mark.parametrize(
+    "forged",
+    [
+        OLD.replace("cd /h/node/nodeunit || exit 1", "cd /h/node/nodeunit; touch /tmp/p || exit 1"),
+        OLD.replace("cd /h/node/nodeunit", "cd $(touch /tmp/p)"),
+        OLD.replace("exec node server.js", "exec sh -c evil"),
+        OLD.replace('"$@"', '"$@"; rm -rf ~'),
+        OLD.replace("HOST=127.0.0.1", "HOST=0.0.0.0"),
+        OLD.replace(" HOST=127.0.0.1", ""),
+        OLD.replace("PORT=3001", "A;touch /tmp/p;B=1"),
+        OLD.replace("PORT=3001", "PORT=$(evil)"),
+        OLD.replace("server.js", "server.js extra"),
+        OLD.replace("cd /h/node/nodeunit || exit 1", "cd /h/node/nodeunit && evil || exit 1"),
+    ],
+)
+def test_a_file_with_our_header_but_not_our_shape_is_not_ours(forged: str) -> None:
+    state, why = node_ownership(forged, "nodeunit", "x")
+    assert state == "foreign" and why
+
+
+def test_a_same_unit_wrapper_from_another_install_method_is_named_as_such(bindir: Path) -> None:
+    (bindir / "nodeunit-server").write_text(wrapper_text("nodeunit", Path("/v/bin/x")))
+    (blocker,) = wrapper_blockers(plan_of(unit()), bindir)
+    assert "another install method" in blocker.reason
+
+
+# -- mutation survivors from review: bin_dir wiring and the temporary's flags --
+
+
+def test_the_planned_wrapper_action_carries_the_bin_dir_and_the_parent_check_bites(
+    tmp_path: Path,
+) -> None:
+    from test_node_backend import backend, block, manifest
+
+    m = manifest(command="nodeunit-server")
+    b = backend(tmp_path)
+    action = next(step for step in b.steps(m, block(m)) if getattr(step, "kind", "") == "wrapper")
+    assert isinstance(action, Action) and isinstance(action.perform, partial)
+    assert action.perform.keywords["bin_dir"] == tmp_path / "bin"
+    # And on the real path: a command that is not one component (built around
+    # validation) lands outside the bin directory and is refused when performed.
+    hostile_block = block(m).model_copy(update={"command": "sub/x"})
+    bad = next(step for step in b.steps(m, hostile_block) if getattr(step, "kind", "") == "wrapper")
+    assert isinstance(bad, Action)
+    with pytest.raises(WrapperRefused, match="not directly inside"):
+        bad.perform()
+    assert not (tmp_path / "bin").exists(), "nothing was created for the refused path"
+
+
+def test_a_planted_temporary_name_is_never_written_through(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, bindir: Path
+) -> None:
+    """The temporary's name has a random suffix; if it were guessed, the open must
+    still not follow or reuse what is there (``O_EXCL|O_NOFOLLOW``)."""
+    monkeypatch.setattr("hammunition.backends.venv.secrets.token_hex", lambda n: "deadbeef")
+    temporary = f".nodeunit-server.hammunition-{os.getpid()}-deadbeef"
+    victim = tmp_path / "victim"
+    victim.write_text(FOREIGN)
+    (bindir / temporary).symlink_to(victim)
+    with pytest.raises(OSError):
+        put(bindir / "nodeunit-server")
+    assert victim.read_text() == FOREIGN
+    assert not (bindir / "nodeunit-server").exists()
+
+
+def test_a_planted_regular_file_at_the_temporary_name_is_not_reused(
+    monkeypatch: pytest.MonkeyPatch, bindir: Path
+) -> None:
+    monkeypatch.setattr("hammunition.backends.venv.secrets.token_hex", lambda n: "deadbeef")
+    temporary = bindir / f".nodeunit-server.hammunition-{os.getpid()}-deadbeef"
+    temporary.write_text(FOREIGN)
+    with pytest.raises(FileExistsError):
+        put(bindir / "nodeunit-server")
+    assert temporary.read_text() == FOREIGN

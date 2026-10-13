@@ -42,7 +42,13 @@ from typing import TYPE_CHECKING
 
 from hammunition.backends.base import Action, BackendError, Command
 from hammunition.backends.source import SourceLayout, extract, patch_steps
-from hammunition.backends.venv import WRAPPER_MARKER, header_ownership, publish_wrapper
+from hammunition.backends.venv import (
+    MAX_WRAPPER_BYTES,
+    WRAPPER_MARKER,
+    WrapperRefused,
+    header_ownership,
+    publish_wrapper,
+)
 from hammunition.manifest.schema import NodeInstall, PackageManifest, RemoteArtifact
 from hammunition.payloads import payload_action, payload_cached, preflight_payloads
 
@@ -61,6 +67,7 @@ __all__ = [
     "install_tree",
     "node_ownership",
     "node_wrapper_text",
+    "unrecognised_wrapper",
     "write_wrapper",
 ]
 
@@ -172,24 +179,40 @@ def install_tree(
     return f"installed {destination}{restored}"
 
 
+#: One word as ``shlex.quote`` writes it: bare from the safe set, else single-quoted
+#: with ``'"'"'`` standing for an embedded quote. No newline either way.
+_WORD = r"""(?:[A-Za-z0-9@%+=:,./_-]+|'(?:[^'\n]|'"'"')*')"""
+
+
 def _node_header() -> re.Pattern[str]:
+    """The writer's whole shape: header, quoted ``cd``, validated assignments, ``exec node``."""
     return re.compile(
         r"#!/bin/sh\n" + re.escape(WRAPPER_MARKER) + r"(?P<unit>[^\n]+)\n"
-        r"cd [^\n]+ \|\| exit 1\n"
-        r'[^\n]+ exec node [^\n]+ "\$@"\n'
+        r"cd " + _WORD + r" \|\| exit 1\n"
+        r"(?:[A-Za-z_][A-Za-z0-9_]*=" + _WORD + r" )*"
+        r"HOST=127\.0\.0\.1 exec node " + _WORD + r' "\$@"\n'
     )
 
 
 def node_ownership(text: str, unit: str, name: str) -> tuple[str, str]:
     """Whether the bytes at a command name are the wrapper this backend writes (#406).
 
-    The exact four-line shape -- shebang, ownership header naming the unit, the
-    ``cd``, the ``exec node`` line -- and nothing around it. The shape is the
-    one every node wrapper has had, so a re-install over an old one works. A
-    wrapper another backend wrote for the same unit is not this shape and is
-    refused, as is another unit's.
+    The writer's shape and nothing around it: shebang, the ownership header
+    naming the unit, ``cd`` to one shell word, any number of ``NAME=word``
+    assignments, ``HOST=127.0.0.1 exec node <word> "$@"``. Every wrapper any
+    version of the node writer produced has this shape (the first writer,
+    9a6f3b23, wrote it), so a re-install over an old one works. Another unit's
+    wrapper, one from another install method, or one with a different ``cd`` or
+    ``exec`` is refused. A file that reproduces the shape byte for byte is
+    indistinguishable from ours, as for venv wrappers.
     """
-    return header_ownership(text, unit, _node_header())
+    state, why = header_ownership(text, unit, _node_header())
+    if state == "foreign" and text.startswith(f"#!/bin/sh\n{WRAPPER_MARKER}{unit}\n"):
+        return state, (
+            f"it carries Hammunition's header for {unit} but not the content the node "
+            f"install method writes (a wrapper from another install method, or edited)"
+        )
+    return state, why
 
 
 def node_wrapper_text(name: str, tree: Path, entry: str, env: dict[str, str]) -> str:
@@ -201,6 +224,23 @@ def node_wrapper_text(name: str, tree: Path, entry: str, env: dict[str, str]) ->
         f"cd {shlex.quote(str(tree))} || exit 1\n"
         f'{assignments} exec node {shlex.quote(entry)} "$@"\n'
     )
+
+
+def unrecognised_wrapper(body: str, unit: str, name: str) -> str | None:
+    """Why the engine would not recognise *body*, its own output, on the next install.
+
+    A wrapper the engine cannot recognise is one it refuses to replace, so every
+    reinstall would fail until the operator deleted it (#406 round 2). The size
+    cap is the other way to get there. None when the text round-trips.
+    """
+    if len(body.encode("utf-8")) > MAX_WRAPPER_BYTES:
+        return (
+            f"the wrapper would be {len(body)} characters, over the {MAX_WRAPPER_BYTES} a "
+            f"wrapper may be, so a later install would not recognise it"
+        )
+    if node_ownership(body, unit, name) != ("ours", ""):
+        return "the wrapper's own text would not recognise itself on the next install"
+    return None
 
 
 def write_wrapper(
@@ -219,6 +259,9 @@ def write_wrapper(
     server is the wrapper's own process -- a Ctrl-C reaches it.
     """
     body = node_wrapper_text(name, tree, entry, env)
+    problem = unrecognised_wrapper(body, name, path.name)
+    if problem is not None:
+        raise WrapperRefused(f"{path}: {problem}")
     publish_wrapper(path, body, name, bin_dir, node_ownership)
     return f"wrote {path} -> node {entry} in {tree}, bound to 127.0.0.1"
 
