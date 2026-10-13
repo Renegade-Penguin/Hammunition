@@ -46,6 +46,7 @@ import re
 import secrets
 import stat
 import sys
+from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -139,12 +140,22 @@ def _legacy_pattern(unit: str, script: str) -> re.Pattern[str]:
     )
 
 
-def _classify(dir_fd: int, name: str, unit: str) -> tuple[str, str]:
+#: The ownership rule of one kind of wrapper: given the text found at *name* and
+#: the unit installing, ``("ours", "")`` or ``("foreign", why)``. The venv rule is
+#: :func:`venv_ownership`; the node backend supplies its own (#406). Everything
+#: else about reaching and replacing the entry is shared.
+Ownership = Callable[[str, str, str], tuple[str, str]]
+
+
+def _classify(
+    dir_fd: int, name: str, unit: str, ownership: Ownership | None = None
+) -> tuple[str, str]:
     """What is at *name* in the directory *dir_fd*: ``(state, why)``.
 
     *state* is ``absent``, ``ours`` or ``foreign``; *why* says what made it
     foreign, in words an operator can act on. Nothing here follows a symbolic
-    link, blocks on a FIFO or reads more than :data:`MAX_WRAPPER_BYTES`.
+    link, blocks on a FIFO or reads more than :data:`MAX_WRAPPER_BYTES`. Whether
+    the bytes are ours is *ownership*'s call (the venv rule when None).
     """
     try:
         st = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
@@ -188,7 +199,19 @@ def _classify(dir_fd: int, name: str, unit: str) -> tuple[str, str]:
         text = raw.decode(_TEXT_ENCODING)
     except UnicodeDecodeError:
         return "foreign", "it is not a text script"
-    found = _header_pattern().fullmatch(text)
+    return (ownership or venv_ownership)(text, unit, name)
+
+
+def header_ownership(
+    text: str, unit: str, header: re.Pattern[str], legacy: re.Pattern[str] | None = None
+) -> tuple[str, str]:
+    """Judge *text* against a wrapper *header* pattern with a ``unit`` group.
+
+    The exact-shape rule both backends share: the whole text must match, the
+    unit in the header must be the installing one, and anything else is
+    someone's.
+    """
+    found = header.fullmatch(text)
     if found is not None:
         owner = found.group("unit")
         if owner == unit:
@@ -197,9 +220,14 @@ def _classify(dir_fd: int, name: str, unit: str) -> tuple[str, str]:
             f"it is the wrapper Hammunition wrote for the unit {owner}, which has the same "
             f"command name as {unit}"
         )
-    if _legacy_pattern(unit, name).fullmatch(text) is not None:
+    if legacy is not None and legacy.fullmatch(text) is not None:
         return "ours", ""
     return "foreign", "it does not carry the header Hammunition's wrappers carry"
+
+
+def venv_ownership(text: str, unit: str, name: str) -> tuple[str, str]:
+    """The venv wrapper's rule: its exact two-line shape, or the pre-#288 one."""
+    return header_ownership(text, unit, _header_pattern(), _legacy_pattern(unit, name))
 
 
 def _refusal(path: Path, unit: str, why: str) -> str:
@@ -265,7 +293,9 @@ def wrapper_name_problem(path: Path, bin_dir: Path | None = None) -> str | None:
     return None
 
 
-def wrapper_conflict(path: Path, unit: str, bin_dir: Path | None = None) -> str | None:
+def wrapper_conflict(
+    path: Path, unit: str, bin_dir: Path | None = None, ownership: Ownership | None = None
+) -> str | None:
     """Why *path* is not Hammunition's to replace, or None when it is free or ours.
 
     Read-only and creating nothing: the plan calls it for every exposed name
@@ -280,7 +310,7 @@ def wrapper_conflict(path: Path, unit: str, bin_dir: Path | None = None) -> str 
     if fd is None:
         return None
     try:
-        state, why = _classify(fd, path.name, unit)
+        state, why = _classify(fd, path.name, unit, ownership)
     finally:
         os.close(fd)
     return _refusal(path, unit, why) if state == "foreign" else None
@@ -288,6 +318,25 @@ def wrapper_conflict(path: Path, unit: str, bin_dir: Path | None = None) -> str 
 
 def write_wrapper(path: Path, target: Path, unit: str, bin_dir: Path | None = None) -> str:
     """A two-line exec wrapper onto the operator's PATH -- only ever our own.
+
+    The mechanics live in :func:`publish_wrapper`, shared with the node backend
+    (#406); this supplies the venv wrapper's bytes and ownership rule.
+    """
+    publish_wrapper(path, wrapper_text(unit, target), unit, bin_dir)
+    return f"wrote {path} -> {target}"
+
+
+def publish_wrapper(
+    path: Path,
+    text: str,
+    unit: str,
+    bin_dir: Path | None = None,
+    ownership: Ownership | None = None,
+) -> None:
+    """Put *text* at *path* in the operator's ``bin`` directory -- only ever over our own.
+
+    Used by every backend that writes an executable wrapper there (venv, node);
+    *ownership* says which existing bytes are ours to replace.
 
     The ownership rule (#288, D-022) and what stands behind it:
 
@@ -324,7 +373,7 @@ def write_wrapper(path: Path, target: Path, unit: str, bin_dir: Path | None = No
     temporary = f".{path.name}.hammunition-{os.getpid()}-{secrets.token_hex(4)}"
     made = False
     try:
-        state, why = _classify(fd, path.name, unit)
+        state, why = _classify(fd, path.name, unit, ownership)
         if state == "foreign":
             raise WrapperRefused(_refusal(path, unit, why))
         # os.open's mode is filtered by the umask (077 -> 0700, 111 -> 0644,
@@ -340,10 +389,10 @@ def write_wrapper(path: Path, target: Path, unit: str, bin_dir: Path | None = No
         made = True
         os.fchmod(tfd, _WRAPPER_MODE)
         with os.fdopen(tfd, "wb") as handle:
-            handle.write(wrapper_text(unit, target).encode(_TEXT_ENCODING))
+            handle.write(text.encode(_TEXT_ENCODING))
         # The look that matters: after the temporary exists, immediately
         # before the entry changes.
-        state, why = _classify(fd, path.name, unit)
+        state, why = _classify(fd, path.name, unit, ownership)
         if state == "foreign":
             raise WrapperRefused(_refusal(path, unit, why))
         if state == "ours":
@@ -356,7 +405,6 @@ def write_wrapper(path: Path, target: Path, unit: str, bin_dir: Path | None = No
             with contextlib.suppress(OSError):
                 os.unlink(temporary, dir_fd=fd)
         os.close(fd)
-    return f"wrote {path} -> {target}"
 
 
 def _publish_new(fd: int, temporary: str, path: Path) -> None:

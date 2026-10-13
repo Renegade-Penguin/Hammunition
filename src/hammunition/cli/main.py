@@ -213,7 +213,7 @@ from hammunition.plan import (
     payload_misses,
     preflight_data,
     resolve,
-    venv_wrapper_blockers,
+    wrapper_blockers,
 )
 from hammunition.progress import LiveStatus, Progress, activate_live, current_live
 from hammunition.repeater_sources import SnapshotHead
@@ -5802,16 +5802,16 @@ def cmd_install(args: argparse.Namespace) -> int:
         ]
         if unreachable:
             return plan_refusal(PlanError(unreachable))
-    # #288: a command name already in ~/.local/bin that Hammunition did not
+    # #288, #406: a command name (venv or node) already in ~/.local/bin that Hammunition did not
     # write (a pipx symlink, a pip script) is a blocker named at plan time,
     # beside every other one, not a wrapper written over it mid-run. Looked at
     # here, after an offline run has deferred the units its Bunker cannot
     # answer for (a deferred unit writes no wrapper, so it cannot collide),
     # where the operator's bin directory is known and nothing has run; the
     # write looks again.
-    wrapper_blockers = venv_wrapper_blockers(plan, user_bin_dir(user or None))
-    if wrapper_blockers:
-        return plan_refusal(PlanError(wrapper_blockers))
+    foreign_wrappers = wrapper_blockers(plan, user_bin_dir(user or None))
+    if foreign_wrappers:
+        return plan_refusal(PlanError(foreign_wrappers))
     step_owners = StepOwners()
     commands = commands_for(
         plan,

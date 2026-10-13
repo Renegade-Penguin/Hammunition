@@ -50,6 +50,7 @@ from hammunition.backends import (
 )
 from hammunition.backends.apt import downgrades_refused
 from hammunition.backends.apt_repo import AptRepoBackend, RepoState
+from hammunition.backends.node import node_ownership
 from hammunition.backends.pmtiles import TILEMAKER_FLOOR
 from hammunition.backends.source import DEFAULT_PREFIX, IMPLEMENTED_BUILD_SYSTEMS
 from hammunition.backends.venv import wrapper_conflict
@@ -126,6 +127,7 @@ __all__ = [
     "resolve",
     "valid_deb_version",
     "venv_wrapper_blockers",
+    "wrapper_blockers",
 ]
 
 REQUESTED_DIRECTLY = "requested"
@@ -2954,8 +2956,8 @@ def resolve(
     )
 
 
-def venv_wrapper_blockers(plan: InstallPlan, bin_dir: Path) -> list[Blocker]:
-    """Every command name a venv unit would put in *bin_dir* that is not Hammunition's to take.  #288.
+def wrapper_blockers(plan: InstallPlan, bin_dir: Path) -> list[Blocker]:
+    """Every command name a venv or node unit would put in *bin_dir* that is not Hammunition's to take.  #288, #406.
 
     D-022: coexist, disclose, never replace silently. A pipx install of
     ``rns`` leaves ``rnsd`` and its siblings in ``~/.local/bin`` as symlinks
@@ -2971,6 +2973,11 @@ def venv_wrapper_blockers(plan: InstallPlan, bin_dir: Path) -> list[Blocker]:
     own the result. A forged header cannot be told from ours -- the check
     proves "this is the file we would have written", not "we wrote it".
 
+    The node backend's wrapper (``command``, else the unit's name) is judged the
+    same way, by its own exact shape (:func:`~hammunition.backends.node.
+    node_ownership`), and a venv name and a node name that coincide are one
+    collision (#406).
+
     Read-only: nothing is created, so a plan on a machine with no
     ``~/.local/bin`` leaves it that way. The write re-checks
     (:func:`~hammunition.backends.venv.write_wrapper`); this is the one that
@@ -2980,10 +2987,16 @@ def venv_wrapper_blockers(plan: InstallPlan, bin_dir: Path) -> list[Blocker]:
     claimed: dict[str, str] = {}
     for planned in plan.packages:
         install = planned.block.install
-        if not isinstance(install, VenvInstall):
+        ownership = None
+        if isinstance(install, VenvInstall):
+            names = list(install.expose)
+        elif isinstance(install, NodeInstall):
+            names = [install.command or planned.name]
+            ownership = node_ownership
+        else:
             continue
         unit = planned.name
-        for script in install.expose:
+        for script in names:
             if script in claimed and claimed[script] != unit:
                 blockers.append(
                     Blocker(
@@ -2997,7 +3010,7 @@ def venv_wrapper_blockers(plan: InstallPlan, bin_dir: Path) -> list[Blocker]:
                 )
                 continue
             claimed[script] = unit
-            conflict = wrapper_conflict(bin_dir / script, unit, bin_dir)
+            conflict = wrapper_conflict(bin_dir / script, unit, bin_dir, ownership)
             if conflict is not None:
                 blockers.append(
                     Blocker(
@@ -3012,3 +3025,7 @@ def venv_wrapper_blockers(plan: InstallPlan, bin_dir: Path) -> list[Blocker]:
                     )
                 )
     return blockers
+
+
+#: The name #288 gave it, kept for callers and tests that predate #406.
+venv_wrapper_blockers = wrapper_blockers
