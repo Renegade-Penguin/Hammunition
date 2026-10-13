@@ -9360,6 +9360,41 @@ and its weekly CI step; tests `tests/test_repeater_sources.py`,
 `tests/test_gen_open_repeater_pin.py`; the offline-navigation guide's
 section 13, `docs/guides/lan-mirror.md` and `docs/reference/cli.md`.
 
+### Amendment, 2026-10-13 — the Open Repeater pin is re-pinned after the weekly review went red
+
+**Status:** proposed (the maintainer decides it at review). **Amends:** D-074,
+whose pin "dies on Open Repeater's calendar".
+
+The weekly `commit pin reviews` job failed on 2026-10-12: the file served
+411,871 bytes, 769 repeaters, sha256 `da59b8be…`; the pin held 240,723 bytes,
+`07be1cba…`. Re-pinning is a trust decision, so the new file was read before
+the generator was run, not after:
+
+- Same envelope (`source: Open Repeater`, `license: CC0`, `count` 769 equal
+  to the list's length) and the same 19 fields on every entry, none new.
+- The growth is exactly Austria 175 and the Netherlands 133 (461 + 308 =
+  769); Sweden 243, Malaysia 121, India 96 and Canada 1 are unchanged in
+  count. All 308 new entries carry no coordinates, no offset and no tone, a
+  `last_verified` in October 2026, and free-text modes ("FSK 9k6bps",
+  "Relaisstation"): a bulk import, not a hostile payload.
+- No duplicate ids, no coordinates outside range, frequencies 3.5985 to
+  24048.96 MHz (amateur bands), callsigns amateur-shaped (the non-ASCII ones
+  are Swedish "SKØ…" prefixes), no markup, no script, longest value 95
+  characters. Thirty `website` values, all plain URLs to club and club-project
+  pages; `credit` and `image_url` are null throughout. The reader never
+  follows or fetches them.
+- Run through `read_open_repeater` unchanged: 769 read, 348 kept, 421 skipped
+  for no usable position (113 before; all 308 new entries plus the old ones),
+  newest `last_verified` 2026-10-11. A test pins that shape.
+- The digest was taken twice independently (the generator's own fetch and a
+  separate `curl`): identical.
+
+The consequence the pin cannot hide: the layer gains no Austrian or Dutch
+rows until Open Repeater has positions for them, and Austria and the
+Netherlands are named in the unit's prose as covered by the file, not by the
+layer. The pin will go stale again on the next change upstream; that is the
+cost D-074 accepted.
+
 ### Amendment, 2026-10-01 — the ACMA register is built: a `register` unit, unverified because nothing else is possible, and a layer filtered to the installed regions
 
 **Status:** proposed (the task named the route; implemented on branch

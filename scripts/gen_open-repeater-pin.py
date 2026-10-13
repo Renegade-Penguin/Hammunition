@@ -5,7 +5,7 @@
 
 """Generate the Open Repeater pin.  D-074.
 
-Fetches Open Repeater's whole list (one URL, about 241 kB, no key) and writes
+Fetches Open Repeater's whole list (one URL, about 412 kB, no key) and writes
 its sha256, its size and the day measured into
 ``catalog/packages/open-repeater.yaml``: three lines, each found exactly once,
 the manifest re-read afterwards to confirm the write did what it says.
@@ -17,7 +17,7 @@ data does. ``--check`` fetches it again and exits 1 naming this script when it
 no longer matches; the weekly pin-review CI job runs it. ``--check --offline``
 checks the manifest's shape only and runs in the test suite.
 
-    scripts/gen_open-repeater-pin.py                    # regenerate (241 kB)
+    scripts/gen_open-repeater-pin.py                    # regenerate (412 kB)
     scripts/gen_open-repeater-pin.py --check            # fetch and compare
     scripts/gen_open-repeater-pin.py --check --offline  # the manifest's shape only
 """
