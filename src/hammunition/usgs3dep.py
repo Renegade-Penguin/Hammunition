@@ -192,7 +192,7 @@ def check_tile(
         return
     if unit is None:
         raise CopernicusError("3DEP catalogue check needs its resolved unit name")
-    return context.choose(
+    context.choose(
         unit,
         row.name,
         lambda: _check_tile_online(row, probe),

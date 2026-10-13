@@ -317,7 +317,7 @@ def check_quad(
         return
     if unit is None:
         raise UstopoError("US Topo catalogue check needs its resolved unit name")
-    return context.choose(
+    context.choose(
         unit,
         quad.path,
         lambda: _check_quad_online(quad, probe),

@@ -711,6 +711,7 @@ class Fetcher:
             if os.lstat(temporary).st_ino == owned:
                 os.unlink(temporary)
         except FileNotFoundError:
+            # Already gone: the goal of the discard is met.
             pass
 
     def _try_discard(self, temporary: Path) -> Exception | None:

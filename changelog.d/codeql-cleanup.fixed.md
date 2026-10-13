@@ -1,0 +1,1 @@
+- Clear five open CodeQL alerts (#482 #483 #484 #485 #487): explain two intentionally empty handlers, drop two return values of a `None` function and one dead test assignment; no behaviour change.
