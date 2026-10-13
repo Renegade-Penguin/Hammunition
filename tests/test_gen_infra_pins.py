@@ -186,6 +186,12 @@ def test_nasr_offline_check_is_falsifiable(
 # --- EIA-860M -------------------------------------------------------------------------
 
 
+XLSX = {"content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+#: What EIA answers (after a redirect to its landing page) for a month it has not
+#: published: a page, status 200 when Akamai lets it through (CI, 2026-10-13).
+LANDING = (200, {"content-type": "text/html; charset=UTF-8", "content-length": "9"}, b"<html>")
+
+
 def _workbook(tmp_path: Path, month: str) -> bytes:
     rows = [[f"Inventory of Operating Generators as of {month}"], *sources_test.EIA_ROWS[1:]]
     return sources_test._xlsx(tmp_path, rows).read_bytes()
@@ -195,7 +201,7 @@ def test_regenerating_eia_pins_the_newest_month(tmp_path: Path) -> None:
     manifest = _copy(tmp_path, "eia-860m")
     body = _workbook(tmp_path, "September 2026")
     september = eia.url_for(date(2026, 9, 1))
-    web = Web({september: (200, {}, body)})
+    web = Web({september: (200, XLSX, body)})
     before = manifest.read_text()
     assert eia.main([], ask=web, today=date(2026, 10, 25), manifest_path=manifest) == 0
     assert ("HEAD", eia.url_for(date(2026, 10, 1))) in web.asked  # tried first
@@ -208,9 +214,49 @@ def test_regenerating_eia_pins_the_newest_month(tmp_path: Path) -> None:
     _only_owned_lines_changed(before, manifest.read_text(), 5)
 
 
+def _eia_before_the_next_release(manifest: Path) -> Web:
+    """2026-10-13: August is the newest published month (index: released
+    September 24, next October 23). The index links September to December
+    anyway; their URLs redirect to a landing page that answers 200."""
+    _, artifact = _artifact(manifest)
+    pages = {
+        eia.url_for(date(2026, m, 1), archive=a): LANDING for m in (9, 10) for a in (False, True)
+    }
+    pages[artifact.url] = (200, {**XLSX, "content-length": str(artifact.size)}, b"")
+    return Web(pages)
+
+
+def test_a_landing_page_for_an_unpublished_month_is_not_a_newer_month(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    manifest = _copy(tmp_path, "eia-860m")
+    web = _eia_before_the_next_release(manifest)
+    code = eia.main(["--check"], ask=web, today=date(2026, 10, 13), manifest_path=manifest)
+    assert (code, capsys.readouterr().out) == (0, "eia-860m.yaml is up to date\n")
+    assert ("HEAD", eia.url_for(date(2026, 10, 1))) in web.asked  # it was looked for
+
+
+def test_regenerating_before_the_next_release_keeps_the_newest_real_month(tmp_path: Path) -> None:
+    manifest = _copy(tmp_path, "eia-860m")
+    web = _eia_before_the_next_release(manifest)
+    body = _workbook(tmp_path, "August 2026")
+    web.pages[eia.url_for(date(2026, 8, 1))] = (200, XLSX, body)
+    assert eia.main([], ask=web, today=date(2026, 10, 13), manifest_path=manifest) == 0
+    assert load_manifest(manifest).version == "2026-08"
+
+
+def test_a_page_is_not_a_workbook_whatever_its_status(tmp_path: Path) -> None:
+    manifest = _copy(tmp_path, "eia-860m")
+    august = eia.url_for(date(2026, 8, 1))
+    for headers in ({}, {"content-type": "text/html"}, {"content-type": "application/pdf"}):
+        web = Web({august: (200, headers, b"x")})
+        with pytest.raises(SystemExit, match="no EIA-860M workbook answered"):
+            eia.main([], ask=web, today=date(2026, 10, 13), manifest_path=manifest)
+
+
 def test_a_workbook_of_another_month_is_refused(tmp_path: Path) -> None:
     manifest = _copy(tmp_path, "eia-860m")
-    web = Web({eia.url_for(date(2026, 9, 1)): (200, {}, _workbook(tmp_path, "August 2026"))})
+    web = Web({eia.url_for(date(2026, 9, 1)): (200, XLSX, _workbook(tmp_path, "August 2026"))})
     with pytest.raises(SystemExit, match="not September 2026"):
         eia.main([], ask=web, today=date(2026, 10, 25), manifest_path=manifest)
 
@@ -231,7 +277,7 @@ def test_the_move_to_the_archive_is_named_then_followed_with_the_pin_kept(
     web = Web(
         {
             archived: (200, {"content-length": str(len(pinned))}, pinned),
-            eia.url_for(date(2026, 9, 1)): (200, {}, b"september"),
+            eia.url_for(date(2026, 9, 1)): (200, XLSX, b"september"),
         }
     )
     code = eia.main(["--check"], ask=web, today=date(2026, 10, 25), manifest_path=manifest)

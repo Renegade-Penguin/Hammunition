@@ -141,12 +141,21 @@ def shape_problems(path: Path) -> list[str]:
     return problems
 
 
+def _is_workbook(answer: data_pin.Answer) -> bool:
+    """A 200 that is a spreadsheet. EIA's index links months it has not
+    published (2026-10-13: September to December), and those URLs redirect
+    to a landing page that answers 200 text/html when Akamai lets it through
+    and 503 when it does not, so status alone made the weekly review go red
+    for an October workbook that does not exist."""
+    return answer.status == 200 and "spreadsheetml" in answer.headers.get("content-type", "")
+
+
 def newest(get: Ask, today: date) -> date:
-    """The newest month whose ``xls/`` file answers, of this month and the
-    three before it."""
+    """The newest month whose ``xls/`` file answers with a workbook, of this
+    month and the three before it."""
     for n in range(4):
         month = _back(date(today.year, today.month, 1), n)
-        if get(url_for(month), HOST, method="HEAD", limit=0).status == 200:
+        if _is_workbook(get(url_for(month), HOST, method="HEAD", limit=0)):
             return month
     raise SystemExit(f"no EIA-860M workbook answered for the four months to {today:%B %Y}")
 
