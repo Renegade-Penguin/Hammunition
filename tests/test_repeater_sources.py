@@ -12,6 +12,7 @@ Direwolf 1.8.1's own output for the synthetic packets in
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 from datetime import date
@@ -49,6 +50,46 @@ def test_open_repeater_is_read_with_both_offset_units_and_its_skips() -> None:
         "no callsign": 1,
         "no usable output frequency": 1,
     }
+
+
+def test_open_repeater_bulk_imports_without_positions_are_skipped_not_guessed(
+    tmp_path: Path,
+) -> None:
+    """The 2026-10-13 list grew from 461 to 769 repeaters when Austria and the
+    Netherlands arrived as bulk imports: no coordinates, no offset, a free-text
+    mode, an integer frequency. They must be counted as skipped for want of a
+    position, never placed, while a positioned row beside them is kept."""
+    bulk = {
+        "id": "x",
+        "callsign": "n0call-a",
+        "frequency": 438,
+        "offset": None,
+        "ctcss": None,
+        "dcs": None,
+        "mode": "FSK 9k6bps",
+        "band": "70cm (430 MHz)",
+        "country": "Nowhere",
+        "city": "TOWN",
+        "lat": None,
+        "lng": None,
+        "status": "active",
+        "last_verified": "2026-10-08",
+    }
+    placed = {**bulk, "callsign": "N0TST", "lat": 3.171, "lng": 101, "offset": -5000}
+    body = {
+        "source": "Open Repeater",
+        "license": "CC0",
+        "count": 3,
+        "repeaters": [bulk, bulk, placed],
+    }
+    path = tmp_path / "open-repeater.json"
+    path.write_text(json.dumps(body))
+    parsed = rs.read_open_repeater(path)
+    assert parsed.read == 3
+    assert [r.callsign for r in parsed.rows] == ["N0TST"]
+    assert parsed.rows[0].offset_hz == -5_000_000
+    assert _reasons(parsed) == {"no usable position": 2}
+    assert rs.open_repeater_date(path) == date(2026, 10, 8)
 
 
 def test_open_repeater_is_dated_by_its_newest_verification() -> None:

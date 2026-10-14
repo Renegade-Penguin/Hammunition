@@ -4,17 +4,17 @@
 
 **Open Repeater's CC0 list of amateur repeaters, for the repeater layer on the map**
 
-- **Version recorded:** 2026-10-01
+- **Version recorded:** 2026-10-13
 - **Categories:** `navigation-maps`
 - **Upstream:** <https://www.openrepeater.org/>
 
 ## What it does
 
-Installs one file, Open Repeater's whole repeater list as JSON (about 241 kB, 461 repeaters on 2026-10-01), under /usr/local/share/hammunition/data/open-repeater/. Nothing reads it on its own: `hammunition maps repeaters import --from-open-repeater` turns it into a repeater layer for QMapShack, Navit and phones, named "Repeaters (Open Repeater YYYY-MM-DD, CC0)" and dated by the newest entry's verification.
+Installs one file, Open Repeater's whole repeater list as JSON (about 412 kB, 769 repeaters on 2026-10-13), under /usr/local/share/hammunition/data/open-repeater/. Nothing reads it on its own: `hammunition maps repeaters import --from-open-repeater` turns it into a repeater layer for QMapShack, Navit and phones, named "Repeaters (Open Repeater YYYY-MM-DD, CC0)" and dated by the newest entry's verification.
 
 ## Why you would want it
 
-It is the only bulk repeater directory found under an open licence (CC0): pinned, verified and mirrorable like any other data, where RepeaterBook forbids offline bundling and hearham's list cannot be pinned. Its coverage today is Sweden, Malaysia and India, with one repeater in Canada and none in the US, so it is worth installing where it covers you; it grows as people add to it.
+It is the only bulk repeater directory found under an open licence (CC0): pinned, verified and mirrorable like any other data, where RepeaterBook forbids offline bundling and hearham's list cannot be pinned. Its coverage today is Sweden, Austria, the Netherlands, Malaysia and India, with one repeater in Canada and none in the US, so it is worth installing where it covers you; it grows as people add to it.
 
 ## Before it will work
 
@@ -22,17 +22,17 @@ Nothing. The repeater layer it feeds is written by `hammunition maps repeaters i
 
 ## How it installs
 
-- data (CC0 1.0, https://www.openrepeater.org/downloads): https://www.openrepeater.org/api/downloads?format=json&country=All+countries&band=All+bands&mode=All+modes&status=All (240,723 bytes)
+- data (CC0 1.0, https://www.openrepeater.org/downloads): https://www.openrepeater.org/api/downloads?format=json&country=All+countries&band=All+bands&mode=All+modes&status=All (411,871 bytes)
 
 ## Known problems
 
-Coverage is thin and uneven (see above). Positions are what contributors entered: 113 of the 461 entries had none on 2026-10-01 and are skipped, and offsets are written both in MHz and in kHz (the import reads both). Because the download URL is not dated, a pin goes stale whenever the site changes; the install then refuses the file by its digest until the pin is regenerated, unless a LAN mirror holds the pinned copy.
+Coverage is thin and uneven (see above). Positions are what contributors entered: 421 of the 769 entries had none on 2026-10-13 (all of Austria's and the Netherlands') and are skipped, and offsets are written both in MHz and in kHz (the import reads both). Because the download URL is not dated, a pin goes stale whenever the site changes; the install then refuses the file by its digest until the pin is regenerated, unless a LAN mirror holds the pinned copy.
 
 ## Keeping it current
 
 - probe: none
 - strategy: reinstall
-- The file changes whenever Open Repeater's data does. The weekly pin review runs `scripts/gen_open-repeater-pin.py --check`, which fetches it (about 241 kB) and goes red when it no longer matches the pin; regenerating is running the script with no arguments, which writes the new digest, size and date into this manifest.
+- The file changes whenever Open Repeater's data does. The weekly pin review runs `scripts/gen_open-repeater-pin.py --check`, which fetches it (about 412 kB) and goes red when it no longer matches the pin; regenerating is running the script with no arguments, which writes the new digest, size and date into this manifest.
 
 ## Where to get help with the software itself
 
