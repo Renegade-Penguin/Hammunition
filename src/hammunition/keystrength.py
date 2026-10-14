@@ -66,6 +66,7 @@ def classify(public_key_line: str) -> KeyStrength:
                 ):
                     raise ValueError("public_key is invalid; OpenSSH refuses RSA under 1024 bits")
             except struct.error:
+                # Truncated blob: no size diagnosis; fall through to the generic ssh-keygen error.
                 pass
         diagnostics = result.stderr.decode("utf-8", errors="replace").splitlines()
         reason = diagnostics[0] if diagnostics else "no diagnostic from ssh-keygen"

@@ -445,7 +445,6 @@ def test_inputs_are_bounded_before_transport(tmp_path: Path) -> None:
         def read(self, relative: str, *, max_bytes: int) -> bytes:
             pytest.fail("oversized input reached transport")
 
-    context = inputs(tmp_path, {})
     row: dict[str, object] = {
         "kind": "region-outline",
         "region": REGION,
