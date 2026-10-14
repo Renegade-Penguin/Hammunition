@@ -9870,6 +9870,37 @@ path or name carries a region is withdrawn for these layers: their names and
 paths name the regions, as the repeater layers' name their states. Tests:
 `tests/test_infra_regions.py`.
 
+### D-075 amendment (2026-10-13): a landing page is not a newer month
+
+The weekly pin review went red on 2026-10-13 (dispatched run 38420470303):
+"EIA-860M for October 2026 is out; the pin is August 2026." It was not out.
+EIA's index lists September to December 2026 with links, but the release
+date on the same page is September 24 (August's workbook) and the next is
+October 23. The `xls/october_generator2026.xlsx` URL answers 301 to
+`/cneaf/electricity/`, a landing page. `scripts/gen_eia860m_pin.py` followed
+the redirect (it keeps redirects on EIA's host) and took status 200 for the
+month's workbook. Akamai in front of that page answers 200 to the CI
+runner and 503 to the maintainer's machine, so the same `--check` was red in
+CI and green locally. Reproduced: a HEAD of the October, September and
+archive URLs from the maintainer's machine returned 503 on 2026-10-13; August
+returned 200, 13,955,142 bytes, `Last-Modified` 2026-09-23.
+
+**Ruling (made on the way, the maintainer's to confirm at review).** A
+month's workbook is present only when the answer is 200 and its
+`Content-Type` is a spreadsheet (`spreadsheetml`). The pin stays August 2026:
+no October file exists to review, so nothing was re-pinned, and the next real
+month is September 2026, due October 23. The regeneration path already refused
+a page (`checked_body` reads the engine's own reader); only the probe was
+wrong, and it would have wasted a 14 MB download and exited with an error
+rather than writing a bad pin. Tests: `tests/test_gen_infra_pins.py`
+(a landing page is not a newer month; regenerating before the next release
+keeps the newest real month; a page is not a workbook whatever its status).
+
+**Residual risk.** The check still trusts EIA's `Content-Type` and the engine's
+reader to tell a workbook from a page; a hostile or broken mirror at
+`www.eia.gov` is out of scope, and the sha256 pin and `checked_body` remain
+what a regenerated pin rests on.
+
 ---
 
 ## D-076 — GraphHopper routes on the browser map: a pinned jar, one graph built here from the station's regions, started by `reference serve` on loopback and reached only through its Host-checked `/map/route`; installed by name, never in a profile
