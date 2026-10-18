@@ -918,7 +918,7 @@ def _gpx_frequency(name: str, desc: str) -> str:
 def _read_json(path: Path, text: str) -> Parsed:
     try:
         data: Any = json.loads(text)
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, RecursionError) as exc:
         raise _unknown(path, f"JSON that does not parse: {exc}") from None
     wanted = {"callsign", "frequency", "latitude", "longitude"}
 

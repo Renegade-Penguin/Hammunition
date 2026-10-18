@@ -45,7 +45,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -273,6 +273,13 @@ class SnapshotRead:
     mirror_failure: str | None
 
 
+def _without_location(text: str, mirror: str) -> str:
+    """*text* with the export's location removed: a path the removable media
+    is mounted at is not echoed, only the input's own name (#394)."""
+    path = urllib.parse.unquote(urllib.parse.urlsplit(mirror).path.rstrip("/"))
+    return text.replace(path + "/", "").replace(mirror.rstrip("/"), "<export>") if path else text
+
+
 def read_snapshot(
     snapshot: Snapshot,
     parse: Callable[[bytes, str], ParsedInput],
@@ -292,18 +299,42 @@ def read_snapshot(
     :class:`RepeaterFetchError` / :class:`RepeaterInputError`.
 
     *offline* never asks the publisher: a snapshot the mirror cannot give is
-    refused, naming it, and not fetched from the publisher instead. Reading a
-    snapshot from a ``file://`` export or the catalogue is #394; until then a
-    file export under *offline* is refused too."""
+    refused, naming the missing input (``repeater-snapshots/<name>``), and not
+    fetched from the publisher instead.
+
+    A ``file://`` mirror (a Bunker export on removable media) is read by
+    :class:`~hammunition.mirror_transport.MirrorTransport`, which owns the
+    confinement: ``safe_relative``, an ``O_NOFOLLOW`` walk from the root, a
+    regular file only, at most the snapshot's limit. #394."""
     from . import repeaters
     from .fetch import MirrorPath, mirror_url
 
     get = fetch or repeaters.fetch_list
     failure: str | None = None
+    relative = f"{SNAPSHOT_UNIT}/{snapshot.name}"
     if mirror and urllib.parse.urlsplit(mirror).scheme == "file":
-        # A file export is read by the Bunker transport, never by this plain
-        # HTTP fetch; asking it would raise on a scheme with no handler.
-        failure = "a file:// mirror is not asked for repeater snapshots"
+        from .backends import BackendError
+        from .mirror_transport import MirrorTransport
+        from .station import StationError
+
+        # Only the export's own name is kept: where removable media is mounted
+        # is not for a console, a layer's licence text or a log to carry.
+        export = urllib.parse.unquote(urllib.parse.urlsplit(mirror).path.rstrip("/")).rpartition(
+            "/"
+        )[2]
+        where = f"file export {export or '/'}: {relative}"
+        try:
+            body = MirrorTransport(mirror).read(relative, max_bytes=snapshot.limit)
+            try:
+                parsed = parse(body, snapshot.url)
+                digest = hashlib.sha256(body).hexdigest()
+            finally:
+                del body
+            return SnapshotRead(parsed, digest, datetime.now(UTC), "mirror", where, None)
+        except (BackendError, StationError, OSError) as exc:
+            failure = _without_location(f"{where}: {exc}", mirror)
+        except repeaters.RepeaterInputError as exc:
+            failure = str(exc)
     elif mirror:
         where = mirror_url(mirror, MirrorPath(SNAPSHOT_UNIT, snapshot.name))
         try:
@@ -317,9 +348,9 @@ def read_snapshot(
             failure = str(exc)
     if offline:
         raise repeaters.RepeaterFetchError(
-            f"offline: the {snapshot.name} repeater snapshot has no Bunker route "
-            f"({failure or 'no mirror is set'}; #394), and its publisher {snapshot.url} "
-            f"is not asked under --offline"
+            f"offline: the {snapshot.name} repeater snapshot is not in the Bunker "
+            f"(missing input {relative}: {failure or 'no mirror is set'}), and its "
+            f"publisher {snapshot.url} is not asked under --offline"
         )
     try:
         body, digest, when = get(snapshot.url, limit=snapshot.limit)
@@ -467,7 +498,7 @@ def _read_file(path: Path) -> tuple[bytes, float]:
 def _open_repeater_list(path: Path, raw: bytes) -> list[Any]:
     try:
         data: Any = json.loads(raw.decode("utf-8-sig"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
         data = None
     if (
         not isinstance(data, dict)
@@ -827,8 +858,8 @@ def parse_brandmeister(raw: bytes, url: str) -> ParsedInput:
     each is dropped first, counted, and nothing else of it is kept."""
     try:
         data: Any = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        data = None
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+        data = None  # RecursionError: a hostile, deeply nested export
     if not isinstance(data, list) or not any(
         isinstance(d, dict) and {"id", "tx", "rx"} <= d.keys() for d in data
     ):

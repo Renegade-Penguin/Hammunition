@@ -300,7 +300,7 @@ if TYPE_CHECKING:
     from hammunition.infra_sources import SourceRead
     from hammunition.interface.repeaters import AllSourcesView, RegistrationView
     from hammunition.qmapshack_config import BRouterSetup
-    from hammunition.repeater_sources import SnapshotRead
+    from hammunition.repeater_sources import Snapshot, SnapshotRead
     from hammunition.repeaters import ParsedInput
     from hammunition.upstream import UpstreamRow
 
@@ -3246,6 +3246,41 @@ def _snapshot_mirror(args: argparse.Namespace) -> str | None:
         return None
 
 
+def _snapshot_offline(args: argparse.Namespace) -> bool | None:
+    """``--offline`` for a repeater fetch (#394), or ``None`` after saying that
+    it cannot be combined with ``--no-mirror`` (the Bunker is the only source)."""
+    offline = bool(getattr(args, "offline", False))
+    if offline and getattr(args, "no_mirror", False):
+        print(
+            "error: --offline reads the list from the station's Bunker and --no-mirror "
+            "ignores it; the two cannot be combined",
+            file=sys.stderr,
+        )
+        return None
+    return offline
+
+
+def _snapshot_announce(
+    snap: Snapshot, disclosure: str, mirror: str | None, *, offline: bool
+) -> None:
+    from hammunition import repeater_sources as rs
+
+    if offline:
+        print(
+            f"Offline: {rs.SNAPSHOT_UNIT}/{snap.name} is read from your Bunker; "
+            f"the publisher is not asked.",
+            flush=True,
+        )
+        return
+    print(disclosure, flush=True)
+    if mirror:
+        print(
+            f"Your station names a LAN mirror ({mirror}): it is asked first, for "
+            f"{rs.SNAPSHOT_UNIT}/{snap.name}, and the publisher only if it does not have it.",
+            flush=True,
+        )
+
+
 def _snapshot_source_lines(read: SnapshotRead, mirror: str | None) -> str:
     """What the operator is told about where the bytes came from, and the
     ``when`` text the layer's licence records.  D-078."""
@@ -3286,16 +3321,13 @@ def _fetch_repeater_list(
     if _refuse_root("repeater overlays"):
         return EXIT_FAILED
     (snap,) = (x for x in rs.snapshots() if x.name == snapshot)
+    offline = _snapshot_offline(args)
+    if offline is None:
+        return EXIT_FAILED
     mirror = _snapshot_mirror(args)
-    print(disclosure, flush=True)
-    if mirror:
-        print(
-            f"Your station names a LAN mirror ({mirror}): it is asked first, for "
-            f"{rs.SNAPSHOT_UNIT}/{snap.name}, and the publisher only if it does not have it.",
-            flush=True,
-        )
+    _snapshot_announce(snap, disclosure, mirror, offline=offline)
     try:
-        read = rs.read_snapshot(snap, parse, mirror=mirror)
+        read = rs.read_snapshot(snap, parse, mirror=mirror, offline=offline)
     except (repeaters.RepeaterFetchError, repeaters.RepeaterInputError) as exc:
         print(f"error: {exc}. Nothing was written.", file=sys.stderr)
         return EXIT_FAILED
@@ -3499,19 +3531,18 @@ def cmd_maps_repeaters_fetch_hearham(args: argparse.Namespace) -> int:
         return EXIT_FAILED
     (snap,) = (x for x in rs.snapshots() if x.name == "hearham.json")
     url = snap.url
+    offline = _snapshot_offline(args)
+    if offline is None:
+        return EXIT_FAILED
     mirror = _snapshot_mirror(args)
-    print(
+    _snapshot_announce(
+        snap,
         f"This fetches hearham.com's whole repeater list from {url} (about 9.5 MB), now and "
         f"only now, and converts it on this machine. hearham publishes no checksum, so what "
         f"arrives is recorded by its sha256 and marked unverified.",
-        flush=True,
+        mirror,
+        offline=offline,
     )
-    if mirror:
-        print(
-            f"Your station names a LAN mirror ({mirror}): it is asked first, for "
-            f"{rs.SNAPSHOT_UNIT}/{snap.name}, and the publisher only if it does not have it.",
-            flush=True,
-        )
 
     def parse(body: bytes, source: str) -> ParsedInput:
         with tempfile.TemporaryDirectory(prefix="hammunition-hearham-") as scratch:
@@ -3520,7 +3551,10 @@ def cmd_maps_repeaters_fetch_hearham(args: argparse.Namespace) -> int:
             try:
                 parsed = repeaters.read_input(staged)
             except repeaters.RepeaterInputError as exc:
-                raise repeaters.RepeaterInputError(f"{source}: {exc}") from None
+                # The staging path is this run's scratch, not the operator's: the
+                # error names the list's own source, never a filesystem path.
+                text = str(exc).replace(str(staged), source).replace(scratch, "<scratch>")
+                raise repeaters.RepeaterInputError(text) from None
         if parsed.format != repeaters.HEARHAM:
             raise repeaters.RepeaterInputError(
                 f"{source} answered with something other than its repeater list ({parsed.format})"
@@ -3528,7 +3562,7 @@ def cmd_maps_repeaters_fetch_hearham(args: argparse.Namespace) -> int:
         return dataclasses.replace(parsed, path=Path(source))
 
     try:
-        read = rs.read_snapshot(snap, parse, mirror=mirror)
+        read = rs.read_snapshot(snap, parse, mirror=mirror, offline=offline)
     except (repeaters.RepeaterFetchError, repeaters.RepeaterInputError) as exc:
         print(f"error: {exc}. Nothing was written.", file=sys.stderr)
         return EXIT_FAILED
@@ -9281,6 +9315,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="do not ask the station's LAN mirror first; fetch from the publisher (D-078)",
     )
+    p_rep_fetch.add_argument(
+        "--offline",
+        action="store_true",
+        help="read the list only from the station's Bunker (a file:// export or a LAN "
+        "mirror) and never ask the publisher; refuses by name a list it does not hold. "
+        "Cannot be combined with --no-mirror (#394)",
+    )
     p_rep_fetch.set_defaults(func=cmd_maps_repeaters_fetch_hearham)
     p_rep_etcc = rep_sub.add_parser(
         "fetch-etcc",
@@ -9292,6 +9333,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="do not ask the station's LAN mirror first; fetch from the publisher (D-078)",
     )
+    p_rep_etcc.add_argument(
+        "--offline",
+        action="store_true",
+        help="read the list only from the station's Bunker (a file:// export or a LAN "
+        "mirror) and never ask the publisher; refuses by name a list it does not hold. "
+        "Cannot be combined with --no-mirror (#394)",
+    )
     p_rep_etcc.set_defaults(func=cmd_maps_repeaters_fetch_etcc)
     p_rep_bm = rep_sub.add_parser(
         "fetch-brandmeister",
@@ -9302,6 +9350,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-mirror",
         action="store_true",
         help="do not ask the station's LAN mirror first; fetch from the publisher (D-078)",
+    )
+    p_rep_bm.add_argument(
+        "--offline",
+        action="store_true",
+        help="read the list only from the station's Bunker (a file:// export or a LAN "
+        "mirror) and never ask the publisher; refuses by name a list it does not hold. "
+        "Cannot be combined with --no-mirror (#394)",
     )
     p_rep_bm.set_defaults(func=cmd_maps_repeaters_fetch_brandmeister)
     p_rep_rb = rep_sub.add_parser(

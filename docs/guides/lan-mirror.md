@@ -432,7 +432,12 @@ under `hold_unverified`, the same switch as the ACMA zip; `fetch-etcc`,
 `fetch-brandmeister` and `fetch-hearham` read `<mirror>/repeater-snapshots/<name>`
 first and the publisher if it is not there, and the layer says which. Nothing
 a mirror serves there can be verified, so the layer is *unverified* either
-way. The project never hosts these files: you bring them, or your Bunker
+way. A `file://` mirror (a Bunker export on a drive) is read the same way and
+with the same confinement as the catalogue: a symlinked path component, a
+FIFO or other non-regular file, or a file over the list's size limit is
+refused, never followed. Under `--offline` the publisher is never asked: a
+list the export does not hold is refused, naming `repeater-snapshots/<name>`
+as the missing input (#394). The project never hosts these files: you bring them, or your Bunker
 takes them from the publisher at your request. **RepeaterBook's API layer
 (`fetch-repeaterbook`, D-081) is not among them**: it is fetched with your own
 key for your own personal use, RepeaterBook's policy rules out caching and
