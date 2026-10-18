@@ -775,3 +775,24 @@ def test_without_offline_a_missing_export_still_falls_back_to_the_publisher(
     code, _, err = _run(["maps", "repeaters", verb], capsys)
     assert code != 0 and len(asked) == 1
     assert "repeater-snapshots" in err
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [b"{invalid", b"[" * 10_000 + b"]" * 10_000, b"<html>a page</html>"],
+    ids=["invalid-json", "deeply-nested", "html"],
+)
+def test_a_malformed_hearham_snapshot_leaks_no_filesystem_path(
+    bad: bytes,
+    station: Station,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    export = _file_export_station(station, monkeypatch)
+    (export / "repeater-snapshots" / "hearham.json").write_bytes(bad)
+    code, out, err = _run(["maps", "repeaters", "fetch-hearham", "--offline"], capsys)
+    text = out + err
+    assert code != 0 and "Nothing was written" in err
+    assert "repeater-snapshots/hearham.json" in text or "hearham.com" in text
+    assert str(export.parent) not in text
+    assert "hammunition-hearham-" not in text and "<scratch>" not in text

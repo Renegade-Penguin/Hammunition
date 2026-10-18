@@ -3551,7 +3551,10 @@ def cmd_maps_repeaters_fetch_hearham(args: argparse.Namespace) -> int:
             try:
                 parsed = repeaters.read_input(staged)
             except repeaters.RepeaterInputError as exc:
-                raise repeaters.RepeaterInputError(f"{source}: {exc}") from None
+                # The staging path is this run's scratch, not the operator's: the
+                # error names the list's own source, never a filesystem path.
+                text = str(exc).replace(str(staged), source).replace(scratch, "<scratch>")
+                raise repeaters.RepeaterInputError(text) from None
         if parsed.format != repeaters.HEARHAM:
             raise repeaters.RepeaterInputError(
                 f"{source} answered with something other than its repeater list ({parsed.format})"
