@@ -45,7 +45,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -292,18 +292,41 @@ def read_snapshot(
     :class:`RepeaterFetchError` / :class:`RepeaterInputError`.
 
     *offline* never asks the publisher: a snapshot the mirror cannot give is
-    refused, naming it, and not fetched from the publisher instead. Reading a
-    snapshot from a ``file://`` export or the catalogue is #394; until then a
-    file export under *offline* is refused too."""
+    refused, naming the missing input (``repeater-snapshots/<name>``), and not
+    fetched from the publisher instead.
+
+    A ``file://`` mirror (a Bunker export on removable media) is read by
+    :class:`~hammunition.mirror_transport.MirrorTransport`, which owns the
+    confinement: ``safe_relative``, an ``O_NOFOLLOW`` walk from the root, a
+    regular file only, at most the snapshot's limit. #394."""
     from . import repeaters
     from .fetch import MirrorPath, mirror_url
 
     get = fetch or repeaters.fetch_list
     failure: str | None = None
+    relative = f"{SNAPSHOT_UNIT}/{snapshot.name}"
     if mirror and urllib.parse.urlsplit(mirror).scheme == "file":
-        # A file export is read by the Bunker transport, never by this plain
-        # HTTP fetch; asking it would raise on a scheme with no handler.
-        failure = "a file:// mirror is not asked for repeater snapshots"
+        from .backends import BackendError
+        from .mirror_transport import MirrorTransport
+        from .station import StationError
+
+        where = (
+            mirror.rstrip("/")
+            + "/"
+            + "/".join(urllib.parse.quote(part, safe="") for part in relative.split("/"))
+        )
+        try:
+            body = MirrorTransport(mirror).read(relative, max_bytes=snapshot.limit)
+            try:
+                parsed = parse(body, snapshot.url)
+                digest = hashlib.sha256(body).hexdigest()
+            finally:
+                del body
+            return SnapshotRead(parsed, digest, datetime.now(UTC), "mirror", where, None)
+        except (BackendError, StationError, OSError) as exc:
+            failure = f"{where}: {exc}"
+        except repeaters.RepeaterInputError as exc:
+            failure = str(exc)
     elif mirror:
         where = mirror_url(mirror, MirrorPath(SNAPSHOT_UNIT, snapshot.name))
         try:
@@ -317,9 +340,9 @@ def read_snapshot(
             failure = str(exc)
     if offline:
         raise repeaters.RepeaterFetchError(
-            f"offline: the {snapshot.name} repeater snapshot has no Bunker route "
-            f"({failure or 'no mirror is set'}; #394), and its publisher {snapshot.url} "
-            f"is not asked under --offline"
+            f"offline: the {snapshot.name} repeater snapshot is not in the Bunker "
+            f"(missing input {relative}: {failure or 'no mirror is set'}), and its "
+            f"publisher {snapshot.url} is not asked under --offline"
         )
     try:
         body, digest, when = get(snapshot.url, limit=snapshot.limit)
