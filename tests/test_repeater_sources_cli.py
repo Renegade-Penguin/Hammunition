@@ -664,3 +664,114 @@ def test_both_sources_failing_names_both_reasons_and_the_publisher_url(
     code, _, err = _run(["maps", "repeaters", "fetch-etcc"], capsys)
     assert code == cli.EXIT_FAILED and "the LAN mirror had failed first" in err
     assert "Nothing was written" in err
+
+
+# --- a file:// Bunker export and --offline (#394) ------------------------------------
+
+_SNAPSHOT_VERBS = [
+    ("fetch-etcc", "etcc.csv"),
+    ("fetch-brandmeister", "brandmeister.json"),
+    ("fetch-hearham", "hearham.json"),
+]
+
+
+def _file_export_station(station: Station, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The station's mirror is a ``file://`` export; the publisher stays unreachable
+    (the suite's socket guard) and `fetch_list` fails the test if asked."""
+    from hammunition.station import Station as Saved
+    from hammunition.station import save_station
+
+    export = station.root / "media" / "bunker-export"
+    (export / "repeater-snapshots").mkdir(parents=True)
+    monkeypatch.setenv("USER", "op")
+    save_station(Saved(mirror=export.as_uri()), path=station.config / "hammunition" / "station.yml")
+
+    def never(url: str, *, limit: int) -> object:
+        pytest.fail(f"the publisher was asked: {url}")
+
+    monkeypatch.setattr(repeaters, "fetch_list", never)
+    return export
+
+
+@pytest.mark.parametrize(("verb", "name"), _SNAPSHOT_VERBS)
+def test_offline_with_a_missing_export_snapshot_is_refused_and_asks_no_publisher(
+    verb: str,
+    name: str,
+    station: Station,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    export = _file_export_station(station, monkeypatch)
+    code, out, err = _run(["maps", "repeaters", verb, "--offline"], capsys)
+    assert code != 0
+    assert f"repeater-snapshots/{name}" in err and "--offline" in err
+    assert "Nothing was written" in err
+    assert not station.layer.exists() or not any(station.layer.iterdir())
+    # The removable media's location is not echoed: only the export's own name.
+    assert str(export.parent) not in out + err
+
+
+@pytest.mark.parametrize(("verb", "name"), _SNAPSHOT_VERBS)
+def test_offline_reads_the_snapshot_from_the_file_export(
+    verb: str,
+    name: str,
+    station: Station,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    export = _file_export_station(station, monkeypatch)
+    (export / "repeater-snapshots" / name).write_bytes((REPEATERS / name).read_bytes())
+    code, out, err = _run(["maps", "repeaters", verb, "--offline"], capsys)
+    assert code == 0, out + err
+    assert "Read from your LAN mirror" in out and "Still unverified" in out
+    assert str(export.parent) not in out + err
+
+
+@pytest.mark.parametrize(("verb", "name"), _SNAPSHOT_VERBS)
+def test_offline_without_a_station_mirror_is_refused_naming_the_input(
+    verb: str,
+    name: str,
+    station: Station,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def never(url: str, *, limit: int) -> object:
+        pytest.fail(f"the publisher was asked: {url}")
+
+    monkeypatch.setattr(repeaters, "fetch_list", never)
+    code, _, err = _run(["maps", "repeaters", verb, "--offline"], capsys)
+    assert code != 0 and f"repeater-snapshots/{name}" in err
+
+
+@pytest.mark.parametrize(("verb", "name"), _SNAPSHOT_VERBS)
+def test_offline_and_no_mirror_cannot_be_combined(
+    verb: str,
+    name: str,
+    station: Station,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _file_export_station(station, monkeypatch)
+    code, _, err = _run(["maps", "repeaters", verb, "--offline", "--no-mirror"], capsys)
+    assert code != 0 and "--no-mirror" in err
+
+
+@pytest.mark.parametrize(("verb", "name"), _SNAPSHOT_VERBS)
+def test_without_offline_a_missing_export_still_falls_back_to_the_publisher(
+    verb: str,
+    name: str,
+    station: Station,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _file_export_station(station, monkeypatch)
+    asked: list[str] = []
+
+    def publisher(url: str, *, limit: int) -> object:
+        asked.append(url)
+        raise repeaters.RepeaterFetchError("publisher down")
+
+    monkeypatch.setattr(repeaters, "fetch_list", publisher)
+    code, _, err = _run(["maps", "repeaters", verb], capsys)
+    assert code != 0 and len(asked) == 1
+    assert "repeater-snapshots" in err

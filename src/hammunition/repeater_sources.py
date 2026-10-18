@@ -273,6 +273,13 @@ class SnapshotRead:
     mirror_failure: str | None
 
 
+def _without_location(text: str, mirror: str) -> str:
+    """*text* with the export's location removed: a path the removable media
+    is mounted at is not echoed, only the input's own name (#394)."""
+    path = urllib.parse.unquote(urllib.parse.urlsplit(mirror).path.rstrip("/"))
+    return text.replace(path + "/", "").replace(mirror.rstrip("/"), "<export>") if path else text
+
+
 def read_snapshot(
     snapshot: Snapshot,
     parse: Callable[[bytes, str], ParsedInput],
@@ -310,11 +317,12 @@ def read_snapshot(
         from .mirror_transport import MirrorTransport
         from .station import StationError
 
-        where = (
-            mirror.rstrip("/")
-            + "/"
-            + "/".join(urllib.parse.quote(part, safe="") for part in relative.split("/"))
-        )
+        # Only the export's own name is kept: where removable media is mounted
+        # is not for a console, a layer's licence text or a log to carry.
+        export = urllib.parse.unquote(urllib.parse.urlsplit(mirror).path.rstrip("/")).rpartition(
+            "/"
+        )[2]
+        where = f"file export {export or '/'}: {relative}"
         try:
             body = MirrorTransport(mirror).read(relative, max_bytes=snapshot.limit)
             try:
@@ -324,7 +332,7 @@ def read_snapshot(
                 del body
             return SnapshotRead(parsed, digest, datetime.now(UTC), "mirror", where, None)
         except (BackendError, StationError, OSError) as exc:
-            failure = f"{where}: {exc}"
+            failure = _without_location(f"{where}: {exc}", mirror)
         except repeaters.RepeaterInputError as exc:
             failure = str(exc)
     elif mirror:
@@ -490,7 +498,7 @@ def _read_file(path: Path) -> tuple[bytes, float]:
 def _open_repeater_list(path: Path, raw: bytes) -> list[Any]:
     try:
         data: Any = json.loads(raw.decode("utf-8-sig"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
         data = None
     if (
         not isinstance(data, dict)
@@ -850,8 +858,8 @@ def parse_brandmeister(raw: bytes, url: str) -> ParsedInput:
     each is dropped first, counted, and nothing else of it is kept."""
     try:
         data: Any = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        data = None
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+        data = None  # RecursionError: a hostile, deeply nested export
     if not isinstance(data, list) or not any(
         isinstance(d, dict) and {"id", "tx", "rx"} <= d.keys() for d in data
     ):

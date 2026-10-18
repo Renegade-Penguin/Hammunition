@@ -74,7 +74,7 @@ def test_a_file_export_with_a_snapshot_is_served_from_the_export(tmp_path: Path)
         parsed: Any = read.parsed
         assert parsed == ("parsed", BODY)
         assert read.mirror_failure is None
-        assert read.where.endswith(f"/{SNAPSHOT_UNIT}/{snapshot.name}")
+        assert read.where.endswith(f"{SNAPSHOT_UNIT}/{snapshot.name}")
         assert read.sha256 == hashlib.sha256(BODY).hexdigest()
     assert publisher.asked == []
 
@@ -210,3 +210,43 @@ def test_the_export_read_stamps_utc_time(tmp_path: Path) -> None:
         snapshot, _parse, mirror=root.as_uri(), fetch=_Publisher()
     )
     assert read.when.tzinfo is not None and read.when.utcoffset() == UTC.utcoffset(None)
+
+
+def test_a_refusal_names_the_input_and_the_export_not_its_location(tmp_path: Path) -> None:
+    snapshot = _snapshot()
+    root = tmp_path / "removable-media" / "bunker-export"
+    (root / SNAPSHOT_UNIT).mkdir(parents=True)
+    text = _refused_offline(root.as_uri(), snapshot, _Publisher())
+    assert f"{SNAPSHOT_UNIT}/{snapshot.name}" in text
+    assert "bunker-export" in text
+    assert str(tmp_path) not in text and "removable-media" not in text
+    # the same for a read that works: `where` carries no location either
+    (root / SNAPSHOT_UNIT / snapshot.name).write_bytes(BODY)
+    read = repeater_sources.read_snapshot(
+        snapshot, _parse, mirror=root.as_uri(), fetch=_Publisher()
+    )
+    assert str(tmp_path) not in read.where and "bunker-export" in read.where
+
+
+NESTED = b"[" * 10_000 + b"]" * 10_000
+
+
+def test_a_deeply_nested_brandmeister_export_is_a_typed_input_error() -> None:
+    with pytest.raises(RepeaterInputError, match="not Brandmeister's device list"):
+        repeater_sources.parse_brandmeister(NESTED, "x")
+
+
+def test_a_deeply_nested_open_repeater_file_is_a_typed_input_error(tmp_path: Path) -> None:
+    path = tmp_path / "open-repeater.json"
+    path.write_bytes(NESTED)
+    with pytest.raises(RepeaterInputError):
+        repeater_sources.read_open_repeater(path)
+
+
+def test_a_deeply_nested_hearham_export_is_a_typed_input_error(tmp_path: Path) -> None:
+    from hammunition import repeaters
+
+    path = tmp_path / "hearham.json"
+    path.write_bytes(NESTED)
+    with pytest.raises(RepeaterInputError):
+        repeaters.read_input(path)

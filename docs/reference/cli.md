@@ -834,6 +834,11 @@ arrived is printed and recorded. Anything but the ETCC's CSV is refused,
 exit 1, and nothing is written. No `--json` form.
 
 `fetch-etcc`, `fetch-brandmeister` and `fetch-hearham` each take `--no-mirror`.
+They also take `--offline` (#394): the list is read only from the station's Bunker
+(a `file://` export is read as the catalogue is: no symlinks, regular files only,
+size-bounded) and the publisher is never asked. A list the Bunker does not hold is
+refused, exit 1, naming `repeater-snapshots/<name>`; `--offline` cannot be combined
+with `--no-mirror`.
 Without it, when the station names a LAN mirror, each asks
 `<mirror>/repeater-snapshots/<name>` first (`etcc.csv`, `brandmeister.json`,
 `hearham.json`) and the publisher on any failure there, including bytes that
