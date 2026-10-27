@@ -2017,6 +2017,7 @@ unprivileged.
 | `devices` | list of [`DeviceView`](#deviceview) | attached devices first, then kept-but-absent ones |
 | `skipped` | list of [`SkippedView`](#skippedview) | attached but not parkable right now |
 | `kept_error` | string or null | why the kept-off entries could not be read; null when they were |
+| `modem_sim` | [`SimView`](#simview) or null | the modem resume step's last SIM check (issue #427); null when it has not run since boot or found no modem |
 
 #### `DeviceView`
 
@@ -2041,6 +2042,17 @@ A catalogued device that is attached but cannot be parked right now.
 |---|---|---|
 | `unit` | string | the catalog entry |
 | `why` | string | why not |
+
+#### `SimView`
+
+What the modem resume step last found (issue #427).
+
+| field | type | meaning |
+|---|---|---|
+| `state` | string | `ok`, `wedged` (found, recovery not finished), `recovered`, `failed` or `unknown` |
+| `wedged` | boolean | the SIM application is stuck now: `wedged`, `failed` or `unknown` |
+| `steps` | list of string | the recovery steps that ran, in order; empty when none |
+| `device` | string | the QMI control node the check read, e.g. `/dev/cdc-wdm0` |
 
 <details><summary>JSON Schema</summary>
 
@@ -2104,6 +2116,39 @@ A catalogued device that is attached but cannot be parked right now.
       "title": "DeviceView",
       "type": "object"
     },
+    "SimView": {
+      "additionalProperties": false,
+      "description": "What the modem resume step last found (issue #427).",
+      "properties": {
+        "state": {
+          "title": "State",
+          "type": "string"
+        },
+        "wedged": {
+          "title": "Wedged",
+          "type": "boolean"
+        },
+        "steps": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Steps",
+          "type": "array"
+        },
+        "device": {
+          "title": "Device",
+          "type": "string"
+        }
+      },
+      "required": [
+        "state",
+        "wedged",
+        "steps",
+        "device"
+      ],
+      "title": "SimView",
+      "type": "object"
+    },
     "SkippedView": {
       "additionalProperties": false,
       "description": "A catalogued device that is attached but cannot be parked right now.",
@@ -2152,12 +2197,23 @@ A catalogued device that is attached but cannot be parked right now.
         }
       ],
       "title": "Kept Error"
+    },
+    "modem_sim": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SimView"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [
     "devices",
     "skipped",
-    "kept_error"
+    "kept_error",
+    "modem_sim"
   ],
   "title": "HardwareDocument",
   "type": "object"

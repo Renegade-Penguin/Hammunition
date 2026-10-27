@@ -5641,6 +5641,56 @@ the `time1` offset; the parked decay without a restart; each mode's
 ntpsec` clean after `unapply`. Until each is recorded, nothing in the docs
 claims it.
 
+### Amendment, 2026-10-27: a SIM-wedge recovery step for the Quectel modem, installed the way the GPS resume step is (issue #427)
+
+**Measured** on the field laptop: the Quectel EM160R-GL (`2c7c:0620`, QMI mode on
+`/dev/cdc-wdm0`) came back at the 2026-10-26 boot and after the 2026-10-27 resume with
+its USIM application in QMI state `illegal` while `AT+CPIN?` said READY, the QMI card
+state was `present` and USB enumeration was healthy. ModemManager failed the modem
+(`sim-missing`) and never retried, so NetworkManager showed the card unavailable.
+Stopping ModemManager, `qmicli -d /dev/cdc-wdm0 --uim-sim-power-off=1` then
+`--uim-sim-power-on=1`, waiting for `ready` and starting ModemManager brought the modem
+back and it carried traffic.
+
+**The step.** A device names it (`resume: {step: modem_sim_recover}`; the catalog carries
+no command) and `hardware apply` installs, with qmicli present, the GPS step's shape
+minus the tmpfiles line:
+
+- `/usr/local/libexec/hammunition-modem-resume`, `0755`, standard-library Python under
+  the engine's header, run by `/usr/bin/python3 -I`;
+- `/etc/systemd/system/hammunition-modem-resume.service`, a oneshot after the four sleep
+  targets and `ModemManager.service`, wanted by those targets **and `multi-user.target`**
+  so one boot check follows the same code path.
+
+It finds the `2c7c:0620` node, reads the card status through `qmi-proxy` (`-p`), and does
+nothing unless the USIM application is `illegal`. On the wedge it makes **one** recovery
+attempt, never repeated in the run: stop ModemManager (only if it was active),
+`quectel-usbnet sim-recover` when that command is installed (ChiefGyk3D/quectel-usbnet#8)
+and otherwise, or if it fails, the two qmicli power verbs; poll up to 15 s for `ready`;
+start ModemManager again whatever the outcome. The run's last lines name the steps it
+ran (`steps run: ...`) and the result is written to `/run/hammunition/modem-sim.state`
+(0644). Exit 0 means nothing to do or recovered; exit 1 prints the manual steps. A parked
+or absent modem is never woken: no node, nothing runs.
+
+**No privilege is widened.** The script runs as root because systemd runs it, as the GPS
+step does. The polkit action `com.chiefgyk3d.hammunition.devctl`, the devctl helper and
+sudoers are untouched. The interactive path is where this stops: the helper (hammunition-tray)
+has no verb that runs `qmicli` with write verbs, so `hardware wake` does not recover a wedged
+SIM by itself. `hardware state` says "SIM wedged" and names
+`sudo systemctl start hammunition-modem-resume.service`. A helper verb (`modem sim-recover`,
+fixed argv, same polkit action) in hammunition-tray would let the wake path run it without
+that command; it is proposed, not built, and needs the tray's contract to grow.
+
+**`hardware state`** reads the state file unprivileged (the node needs root, so state does
+not probe it live) and prints a "SIM wedged" line, or notes a recovery; the JSON document
+gains `modem_sim` (`state`, `wedged`, `steps`, `device`). `hardware apply --no-modem-resume`
+leaves the step out; `hardware unapply` removes both files by content.
+
+**Not yet measured:** the unit running across a real suspend or boot (the recovery
+sequence is the measured part); whether the USB node is back when the unit runs after a
+resume (it waits up to 8 s for it); the `quectel-usbnet sim-recover` argv, assumed to take
+none and to be safe to run with ModemManager already stopped.
+
 ## D-059 — The engine has a machine-readable interface: one JSON document per command on stdout, rendered from the same objects as the text; a real install is never driven through JSON; and `hammunition` is put on the PATH
 
 **Date:** 2026-09-28. **Status:** accepted (maintainer, 2026-09-28: option A

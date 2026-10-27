@@ -125,7 +125,7 @@ exactly where things stand:
 | Package manifests | 🟡 **332**, up from 71 |
 | …Debian Blend coverage | ✅ **152 of 152** — SCOPE.md's first 1.0 stage, complete |
 | …parity coverage | 🟡 **111 of the 125 units that owe a manifest** — [every gap has a recorded reason](docs/reference/parity-coverage.md) |
-| Hardware catalog | 🟡 34 devices, 9 classes, 302 confirmed USB identifiers |
+| Hardware catalog | 🟡 35 devices, 9 classes, 303 confirmed USB identifiers |
 | …of which **supported** / **run on hardware here** | **19** / **7** — [two different claims](docs/DECISIONS.md), kept apart on purpose |
 | Profiles | ✅ **all 13 of the 1.0 set**, plus 8 post-1.0 — every package installable, asserted by test; a member a target's archive lacks is deferred by name, never the whole profile (D-039) |
 | Inventories of all six upstream sources | ✅ complete and measured |
@@ -431,7 +431,7 @@ catalog and the measurements, so they cannot say what the code does not.
 | [`docs/QUESTIONS.md`](docs/QUESTIONS.md) | Open questions, with recommendations |
 | [`docs/reference/`](docs/reference/) | The measured inventories everything rests on |
 | [`docs/reference/hardware-gaps.md`](docs/reference/hardware-gaps.md) | Every USB identifier we don't have, who can close it, and what it blocks |
-| [`docs/reference/device-naming.md`](docs/reference/device-naming.md) | What `/dev/serial/by-id/` already covers, and the 29 of 34 devices where it does not |
+| [`docs/reference/device-naming.md`](docs/reference/device-naming.md) | What `/dev/serial/by-id/` already covers, and the 30 of 35 devices where it does not |
 | [`docs/contributing/hardware.md`](docs/contributing/hardware.md) | How to send one, and what we do and don't store |
 | [`docs/reference/bench-verification-5430.md`](docs/reference/bench-verification-5430.md) | What has run on the field target itself, a Dell Latitude 5430 Rugged, and what has not |
 | [`docs/reference/release-1.0-checklist.md`](docs/reference/release-1.0-checklist.md) | What stands between here and a 1.0 tag, each item with its owner and its measurement |

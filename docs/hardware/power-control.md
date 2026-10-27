@@ -507,6 +507,38 @@ not widen who qualifies. Deleting the file (or reverting to the packaged
 default, since nothing under `/etc/polkit-1/rules.d/` is ours to manage) puts
 the prompt back.
 
+## After suspend: a modem whose SIM wedges (issue #427)
+
+**The symptom.** After a suspend or a boot the Quectel EM160R-GL looks dead:
+NetworkManager shows `cdc-wdm0` unavailable and ModemManager reports the modem
+`failed: sim-missing` ("Illegal SIM/USIM application state"), though the SIM is fine
+(`AT+CPIN?` READY, QMI card state `present`). The USIM application is in QMI state
+`illegal`, and ModemManager never retries. Measured on the field laptop, 2026-10-26 and
+2026-10-27; the recovery sequence below worked by hand.
+
+**What `hardware apply` installs for it.** The `quectel-em160r-gl` entry asks for
+`resume: {step: modem_sim_recover}`, and where `qmicli` is installed (`libqmi-utils`)
+apply adds two root-owned files, printed whole in the plan:
+`/usr/local/libexec/hammunition-modem-resume` (0755) and
+`/etc/systemd/system/hammunition-modem-resume.service`, run after each sleep target and
+at boot. It reads the card status; if the USIM application is `illegal` it makes **one**
+recovery attempt (stop ModemManager, `quectel-usbnet sim-recover` if installed, else
+`qmicli --uim-sim-power-off=1` then `--uim-sim-power-on=1`, wait up to 15 s for `ready`,
+start ModemManager) and logs the steps it ran. It exits non-zero and prints the manual
+steps if the application does not come back. It never parks or wakes anything and does
+nothing when the modem is parked. No polkit action or helper verb is added: systemd runs
+it as root.
+
+**Seeing it.** `hammunition hardware state` prints "SIM wedged" while the wedge stands
+(read from `/run/hammunition/modem-sim.state`, because the node needs root).
+`journalctl -u hammunition-modem-resume` or `/run/hammunition/modem-resume.log` has the
+run. To run it again by hand: `sudo systemctl start hammunition-modem-resume.service`.
+`hardware apply --no-modem-resume` leaves it out and `hardware unapply` removes it.
+
+**Not measured:** the unit's run across a real suspend or boot, and a `wake` from the
+CLI recovering the SIM (it does not: the helper has no verb for it, see D-058's
+2026-10-27 amendment).
+
 ## After suspend
 
 **The symptom.** The laptop sleeps and wakes, and the GPS has no fix:
