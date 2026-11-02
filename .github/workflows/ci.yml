@@ -57,6 +57,12 @@ jobs:
       docker-build: false
       workflow-lint: true
       egress-policy: block
+      # The suite is 9,574 tests and takes 12.6 minutes (757 s of pytest, run
+      # 41478170267, Python 3.11) on a green leg, against GYST's 15-minute
+      # per-job default. Legs that land on a slower runner were cancelled at
+      # the cap in the middle of 'Run tests' (#433). Thirty minutes is twice
+      # the measured time; a hang still fails, just later.
+      timeout-minutes: 30
 
   # -------------------------------------------------------------------------
   # Atheris targets under fuzz/ (the parsers: manifests, repeater imports,
