@@ -20,5 +20,6 @@
       "why": "its port has no power control"
     }
   ],
-  "kept_error": null
+  "kept_error": null,
+  "modem_sim": null
 }

@@ -585,7 +585,7 @@ class RigBlock(Strict):
         return self
 
 
-ResumeStep = Literal["gpsd_reopen"]
+ResumeStep = Literal["gpsd_reopen", "modem_sim_recover"]
 """What the engine does for a device after the machine resumes. A name, never a command.
 
 ``gpsd_reopen``: a systemd oneshot ordered after the four sleep targets gives
@@ -594,6 +594,12 @@ gpsd a fresh open of each ``/dev/gpsN`` (``gpsdctl remove`` and ``add``, then
 check, so a listed but silent receiver is not restarted), and does nothing
 when no ``/dev/gpsN`` exists. Installed by ``hardware apply``, removed
 by ``hardware unapply`` (issue #177, D-058 amended 2026-10-01).
+
+``modem_sim_recover``: a systemd oneshot, ordered after the four sleep targets and
+at boot, reads the SIM application state of a ``2c7c:0620`` modem and, only if it
+is ``illegal``, makes one root recovery attempt (stop ModemManager, SIM power off
+and on, wait for ``ready``, start ModemManager). Installed by ``hardware apply``,
+removed by ``hardware unapply`` (issue #427).
 """
 
 
