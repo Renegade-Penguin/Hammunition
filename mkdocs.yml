@@ -239,6 +239,7 @@ nav:
       - Laptop radios and camera (parkable):
           - Cellular modems: hardware/wwan-modem-class.md
           - Dell DW5821e: hardware/dell-dw5821e.md
+          - Quectel EM160R-GL: hardware/quectel-em160r-gl.md
           - Dell DW5930e: hardware/dell-dw5930e.md
           - Bluetooth controllers: hardware/bluetooth-controller-class.md
           - Intel AX210 Bluetooth: hardware/intel-ax210-bluetooth.md
