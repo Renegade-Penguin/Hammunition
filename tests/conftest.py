@@ -524,6 +524,43 @@ def resume_files(
     return root
 
 
+@pytest.fixture(autouse=True)
+def _no_host_modem_resume_files(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[Path]:
+    """The modem resume step's paths (issue #427) point somewhere that does not
+    exist, for every test, for the reason `_no_host_resume_files` gives. Tests that
+    want files request `modem_resume_files`."""
+    from hammunition.hardware import modem_resume
+
+    root = tmp_path_factory.getbasetemp() / "host-modem-resume-files-absent"
+    for name, default in modem_resume.PATHS.items():
+        monkeypatch.setattr(modem_resume, name, str(root) + default)
+    yield root
+    if root.exists():
+        shutil.rmtree(root)
+        pytest.fail(
+            "a test wrote modem resume files without the modem_resume_files fixture; "
+            "request it so they land in that test's own tmp_path"
+        )
+
+
+@pytest.fixture
+def modem_resume_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _no_host_modem_resume_files: Path
+) -> Path:
+    """A machine with qmicli installed and no modem resume step yet, under tmp_path."""
+    from hammunition.hardware import modem_resume
+
+    root = tmp_path / "modem-resume-root"
+    for name, default in modem_resume.PATHS.items():
+        monkeypatch.setattr(modem_resume, name, str(root) + default)
+    qmicli = Path(modem_resume.QMICLI)
+    qmicli.parent.mkdir(parents=True)
+    qmicli.write_text("")
+    return root
+
+
 TRAY_SHA = "614148fb4241e88ca007885d01ef97d0752c8cd47b6e57337e2ee12ab3bfc438"
 """The sha256 both tray units pin (hammunition-tray v0.5.0's source archive)."""
 

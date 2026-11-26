@@ -147,7 +147,7 @@ from hammunition.geofabrik import (
     region_ids,
 )
 from hammunition.geofabrik import resolve as resolve_region
-from hammunition.hardware import devctl_export, gps_resume
+from hammunition.hardware import devctl_export, gps_resume, modem_resume
 from hammunition.hardware import polkit as hardware_polkit
 from hammunition.hardware.apply import HardwarePlan
 from hammunition.hardware.polkit import HELPER_PATH, POLICY_PATH, describe_refusal
@@ -6969,18 +6969,29 @@ def _disclose_gps_resume(plan: HardwarePlan) -> None:
             print(line)
 
 
+def _disclose_modem_resume(plan: HardwarePlan) -> None:
+    """The modem SIM-wedge recovery's disclosure (issue #427), when the plan carries one."""
+    if plan.modem_resume is not None:
+        for line in modem_resume.disclose(plan.modem_resume):
+            print(line)
+
+
 def _gps_resume_commands(plan: HardwarePlan, staging_root: str) -> list[Command]:
-    if plan.gps_resume is None:
-        return []
-    return gps_resume.install_commands(plan.gps_resume, staging_root)
+    out: list[Command] = []
+    if plan.gps_resume is not None:
+        out += gps_resume.install_commands(plan.gps_resume, staging_root)
+    if plan.modem_resume is not None:
+        out += modem_resume.install_commands(plan.modem_resume, staging_root)
+    return out
 
 
 def _stage_gps_resume(plan: HardwarePlan, staging_dir: Path) -> list[Command]:
     """Stage the step's two files; return its commands as they will run, so
     the apply loop can log each one (``gps_resume``)."""
-    if plan.gps_resume is None:
-        return []
-    gps_resume.stage(plan.gps_resume, staging_dir)
+    if plan.gps_resume is not None:
+        gps_resume.stage(plan.gps_resume, staging_dir)
+    if plan.modem_resume is not None:
+        modem_resume.stage(plan.modem_resume, staging_dir)
     return _gps_resume_commands(plan, str(staging_dir))
 
 
@@ -7037,6 +7048,7 @@ def cmd_hardware_apply(args: argparse.Namespace) -> int:
             user_groups_now=groups_now,
             with_time=not getattr(args, "no_gps_time", False),
             with_gps_resume=not getattr(args, "no_gps_resume", False),
+            with_modem_resume=not getattr(args, "no_modem_resume", False),
             with_devctl_export=True,
         )
     except TimeError as exc:
@@ -7045,7 +7057,11 @@ def cmd_hardware_apply(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return EXIT_UNPLANNABLE
-    except (gps_resume.GpsResumeError, devctl_export.DevctlExportError) as exc:
+    except (
+        gps_resume.GpsResumeError,
+        modem_resume.ModemResumeError,
+        devctl_export.DevctlExportError,
+    ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_UNPLANNABLE
     from hammunition import geoclue
@@ -7192,6 +7208,7 @@ def cmd_hardware_apply(args: argparse.Namespace) -> int:
     for line in _geoclue_disclosure(args, geo):
         print(line)
     _disclose_gps_resume(plan)
+    _disclose_modem_resume(plan)
     _disclose_devctl_export(plan)
 
     preview_commands, preview_helper, preview_policy, _preview_time = build_commands("<staging>")
@@ -7412,6 +7429,8 @@ def cmd_hardware_apply(args: argparse.Namespace) -> int:
             problems += geoclue.verify_grants(geo)
         if plan.gps_resume is not None:
             problems += gps_resume.verify(plan.gps_resume)
+        if plan.modem_resume is not None:
+            problems += modem_resume.verify(plan.modem_resume)
         if plan.devctl_export is not None:
             problems += devctl_export.verify(plan.devctl_export)
         if problems:
@@ -7510,7 +7529,8 @@ def cmd_hardware_unapply(args: argparse.Namespace) -> int:
     geo_removal = geoclue.plan_geoclue_removal()
     geo_present = not geo_removal.is_empty
     resume_removal = gps_resume.plan_gps_resume_removal()
-    resume_present = not resume_removal.is_empty
+    modem_removal = modem_resume.plan_modem_resume_removal()
+    resume_present = not resume_removal.is_empty or not modem_removal.is_empty
     export_removal = devctl_export.plan_removal()
     export_present = not export_removal.is_empty
     owned = {HELPER_PATH, POLICY_PATH}
@@ -7668,7 +7688,10 @@ def cmd_hardware_unapply(args: argparse.Namespace) -> int:
         present.append(KEPT_RULES)
 
     time_preview = removal_commands(removal, "<staging>")
-    resume_commands = gps_resume.removal_commands(resume_removal)
+    resume_commands = [
+        *gps_resume.removal_commands(resume_removal),
+        *modem_resume.removal_commands(modem_removal),
+    ]
     geo_commands = geoclue.removal_commands(geo_removal)
     export_commands = devctl_export.removal_commands(export_removal)
     shown = [*commands, *time_preview, *resume_commands, *geo_commands, *export_commands]
@@ -7736,6 +7759,7 @@ def cmd_hardware_unapply(args: argparse.Namespace) -> int:
     if geo_present:
         problems += geoclue.verify_removal(geo_removal)
     problems += gps_resume.verify_removal(resume_removal)
+    problems += modem_resume.verify_removal(modem_removal)
     problems += devctl_export.verify_removal(export_removal)
     if problems:
         for problem in problems:
@@ -7754,7 +7778,9 @@ def cmd_hardware_unapply(args: argparse.Namespace) -> int:
     if geo_present:
         after.append("GeoClue no longer reads the tether; `hardware apply` sets it up again.")
     if resume_present:
-        after.append("`hardware apply` reinstalls the GPS resume step.")
+        after.append(
+            "`hardware apply` reinstalls the GPS resume step (and the modem recovery, if installed)."
+        )
     if export_present:
         after.append("`hardware apply` writes the helper's device and service lists again.")
     print("\nDone and verified. " + " ".join(after))
@@ -7819,7 +7845,7 @@ def cmd_hardware_state(args: argparse.Namespace) -> int:
         kept_error, kept = str(exc), []
 
     rows, absent = _kept_split(sorted(found, key=lambda p: (p.name, p.address)), kept)
-    doc = build_hardware(rows, absent, skipped, kept_error)
+    doc = build_hardware(rows, absent, skipped, kept_error, modem_resume.read_sim_state())
     if envelope.wanted(args):
         envelope.emit(doc)
         return EXIT_OK
@@ -9744,6 +9770,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-gps-resume",
         action="store_true",
         help="leave out the GPS receiver's resume step (issue #177)",
+    )
+    p_hw_apply.add_argument(
+        "--no-modem-resume",
+        action="store_true",
+        help="leave out the modem SIM-wedge recovery step (issue #427)",
     )
     p_hw_apply.set_defaults(func=cmd_hardware_apply)
 

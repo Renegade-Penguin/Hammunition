@@ -1,0 +1,75 @@
+# SPDX-FileCopyrightText: Copyright (C) 2026 Renegade Penguin LLC
+# SPDX-License-Identifier: CC0-1.0
+
+kind: device
+name: quectel-em160r-gl
+summary: Quectel EM160R-GL — LTE Cat-16 modem on USB in QMI mode, with a resume step for the SIM that wedges after sleep
+vendor: Quectel
+device_class: wwan-modem
+status: untested
+
+usb_ids:
+  - vendor: "2c7c"
+    product: "0620"
+    description: Quectel EM160R-GL LTE modem, QMI mode (/dev/cdc-wdm0)
+    evidence: >-
+      Read on the field laptop on 2026-10-27 (issue #427): the card enumerates as
+      2c7c:0620 with the qmi_wwan driver and a QMI control node at /dev/cdc-wdm0
+      in QMI mode (not MBIM). `qmicli -d /dev/cdc-wdm0 --uim-get-card-status`,
+      `AT+CPIN?` and `AT+QSIMDET?` were run on it; nothing was written to the
+      device apart from the SIM power cycle recorded below.
+    confirmed: true
+    node_kind: serial
+    ambiguity:
+      basis: shared_across_products
+      evidence: >-
+        Quectel's 2c7c vendor identifier is shared by its whole module range
+        (the catalog's generated ambiguity list already records 2c7c:0125, the
+        EC25), and the same product number can be presented in different
+        firmware modes (QMI, MBIM, RMNET). Only the device that was read
+        carries it here.
+      also_used_by:
+        - other Quectel modules and firmware modes under vendor 2c7c
+
+resume:
+  step: modem_sim_recover
+  note: >-
+    Measured on the field laptop (issue #427, 2026-10-26 boot and 2026-10-27
+    resume): the card comes back with its USIM application in QMI state
+    `illegal` while `AT+CPIN?` says READY and the QMI card state is `present`.
+    ModemManager fails initialization ("Illegal SIM/USIM application state"),
+    marks the modem `failed: sim-missing` and never retries, so NetworkManager
+    shows the card unavailable. A SIM power cycle (`qmicli --uim-sim-power-off=1`
+    then `--uim-sim-power-on=1`) with ModemManager stopped returned the
+    application to `ready`, and after a ModemManager start the modem registered
+    and carried traffic. `hammunition hardware apply` installs
+    hammunition-modem-resume.service, which after every suspend, hibernation and
+    boot reads the card status and only on `illegal` makes ONE such attempt as
+    root (`quectel-usbnet sim-recover` when installed, else qmicli), then
+    starts ModemManager again whatever happened. It exits non-zero and prints
+    the manual steps if the application does not come back `ready`.
+    `hammunition hardware state` shows "SIM wedged" while the wedge stands. It
+    never parks or wakes anything, and does nothing when the modem is parked.
+    The recovery sequence is measured; the unit's run across a real suspend is
+    not yet.
+
+documentation:
+  what_it_is: >-
+    A Quectel EM160R-GL, an LTE Cat-16 modem in an M.2 slot that presents on the
+    USB bus as 2c7c:0620 and is driven in QMI mode (qmi_wwan, control node
+    /dev/cdc-wdm0). It is parked and woken like any WWAN modem through the
+    wwan-modem class.
+  what_you_can_do_with_it: >-
+    Carry the station's data link under ModemManager and NetworkManager, and be
+    parked and woken from the CLI, the generated menu entries or the tray. Its
+    SIM wedge after sleep is detected and recovered by the resume step.
+  setup_steps: >-
+    Install libqmi-utils (qmicli), then run `hammunition hardware apply`, which
+    installs the resume step and says what it writes first. A SIM and an APN
+    are the operator's. Parking and waking have not been run on this card.
+  known_problems: >-
+    After a suspend or a boot the SIM application can come back `illegal` and
+    ModemManager gives up on the modem; the resume step recovers it once per
+    event. If that fails, the manual steps are printed in
+    `journalctl -u hammunition-modem-resume` and in its exit status.
+    Parking has not been run on this card (unmeasured).

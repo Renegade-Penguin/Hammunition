@@ -9,6 +9,7 @@ A cellular modem as a family: a 4G or 5G WWAN module, fitted in a laptop's M.2 s
 ## Devices in this class
 
 - [dell-dw5821e](dell-dw5821e.md)
+- [quectel-em160r-gl](quectel-em160r-gl.md)
 
 ## Shared setup
 

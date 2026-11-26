@@ -32,6 +32,7 @@ from hammunition.gpstime.grants import TimeGrants, plan_time_grants
 from hammunition.hardware.detect import AttachedDevice, Match, match_catalog, read_usb_bus
 from hammunition.hardware.devctl_export import DevctlExport, plan_devctl_export
 from hammunition.hardware.gps_resume import GpsResume, plan_gps_resume
+from hammunition.hardware.modem_resume import ModemResume, plan_modem_resume
 from hammunition.hardware.polkit import PolkitArtifacts, plan_polkit
 from hammunition.hardware.udev import RULES_PATH, Omission, rules_file
 from hammunition.manifest.hardware import DeviceClass, DeviceManifest
@@ -76,6 +77,10 @@ class HardwarePlan:
     """The GPS receiver's resume step (issue #177), or None when the caller did
     not ask for it or no catalog entry declares one."""
 
+    modem_resume: ModemResume | None = None
+    """The modem SIM-wedge recovery (issue #427), or None when the caller did not
+    ask for it or no catalog entry declares one."""
+
     devctl_export: DevctlExport | None = None
     """The two lists the tray's helper reads (D-056, amended 2026-10-02), or None
     when the caller did not ask for them."""
@@ -88,6 +93,7 @@ class HardwarePlan:
             and self.polkit.is_noop
             and (self.time is None or self.time.is_noop)
             and (self.gps_resume is None or self.gps_resume.is_noop)
+            and (self.modem_resume is None or self.modem_resume.is_noop)
             and (self.devctl_export is None or self.devctl_export.is_noop)
         )
 
@@ -121,6 +127,7 @@ def plan_hardware(
     polkit: PolkitArtifacts | None = None,
     with_time: bool = False,
     with_gps_resume: bool = False,
+    with_modem_resume: bool = False,
     with_devctl_export: bool = False,
 ) -> HardwarePlan:
     """Resolve a hardware plan. Reads sysfs and the current rules file; writes nothing.
@@ -144,6 +151,12 @@ def plan_hardware(
     and the plan carries the resume step (issue #177) when an entry declares
     ``resume: {step: gpsd_reopen}``. Raises
     :class:`~hammunition.hardware.gps_resume.GpsResumeError` on a file at the
+    step's path that Hammunition did not write.
+
+    ``with_modem_resume``: `hardware apply` passes True unless `--no-modem-resume`,
+    and the plan carries the SIM-wedge recovery (issue #427) when an entry declares
+    ``resume: {step: modem_sim_recover}``. Raises
+    :class:`~hammunition.hardware.modem_resume.ModemResumeError` on a file at the
     step's path that Hammunition did not write.
 
     ``with_devctl_export``: `hardware apply` passes True and the plan carries the
@@ -181,6 +194,7 @@ def plan_hardware(
         polkit=polkit if polkit is not None else plan_polkit(),
         time=plan_time_grants() if with_time else None,
         gps_resume=_resume_step(all_entries) if with_gps_resume else None,
+        modem_resume=_modem_step(all_entries) if with_modem_resume else None,
         devctl_export=plan_devctl_export(classes, devices) if with_devctl_export else None,
     )
 
@@ -189,3 +203,9 @@ def _resume_step(entries: list[DeviceClass | DeviceManifest]) -> GpsResume | Non
     """The resume step, when any catalog entry asks for it by name."""
     wanted = any(e.resume is not None and e.resume.step == "gpsd_reopen" for e in entries)
     return plan_gps_resume() if wanted else None
+
+
+def _modem_step(entries: list[DeviceClass | DeviceManifest]) -> ModemResume | None:
+    """The modem recovery, when any catalog entry asks for it by name."""
+    wanted = any(e.resume is not None and e.resume.step == "modem_sim_recover" for e in entries)
+    return plan_modem_resume() if wanted else None
